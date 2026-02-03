@@ -217,8 +217,8 @@ class VoiceCopilot {
                 }
             }
             
-            // Check for abort words during auto-submit countdown
-            if (this.autoSubmitActive) {
+            // Check for abort words during auto-submit countdown (only when not recording)
+            if (this.autoSubmitActive && !this.isRecording) {
                 for (const abort of this.abortWords) {
                     if (text.includes(abort)) {
                         console.log('Abort word detected:', abort);
