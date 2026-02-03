@@ -72,9 +72,6 @@ class VoiceCopilot {
     }
 
     init() {
-        // Generate and display session ID
-        this.generateSessionId();
-        
         // Check for saved working directory or show picker
         this.initWorkingDirectory();
         
@@ -187,16 +184,17 @@ class VoiceCopilot {
         this.checkSupport();
     }
 
-    generateSessionId() {
-        // Generate a short random session ID
-        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';  // Avoiding confusing chars
-        let id = '';
-        for (let i = 0; i < 6; i++) {
-            id += chars.charAt(Math.floor(Math.random() * chars.length));
-        }
-        this.sessionId = id;
+    updateSessionId(sessionId) {
+        // Update session ID display with Copilot session GUID
         if (this.sessionIdValue) {
-            this.sessionIdValue.textContent = id;
+            if (sessionId) {
+                // Show truncated GUID for readability
+                const shortId = sessionId.substring(0, 8);
+                this.sessionIdValue.textContent = shortId;
+                this.sessionIdValue.title = sessionId;  // Full ID on hover
+            } else {
+                this.sessionIdValue.textContent = '--';
+            }
         }
     }
 
@@ -1285,6 +1283,8 @@ class VoiceCopilot {
                 const data = await response.json();
                 this.serverOnline = true;
                 this.updateHealthStatus();
+                // Update session ID from backend
+                this.updateSessionId(data.session_id);
             } else {
                 this.serverOnline = false;
                 this.updateHealthStatus();

@@ -219,7 +219,9 @@ def chat():
                         "model": "gpt-4",
                         "streaming": False
                     })
-                    print("[CHAT] Session created")
+                    # Log session properties for debugging
+                    print(f"[CHAT] Session created, type: {type(_copilot_session)}")
+                    print(f"[CHAT] Session attrs: {dir(_copilot_session)}")
                 
                 print("[CHAT] Sending message to Copilot...")
                 response = await _copilot_session.send_and_wait({"prompt": enhanced_message})
@@ -325,10 +327,22 @@ def generate_voice_status(response: str) -> str:
 @app.route("/api/health")
 def health():
     """Health check endpoint"""
+    session_id = None
+    if _copilot_session is not None:
+        # Try to get session ID from the session object
+        if hasattr(_copilot_session, 'id'):
+            session_id = _copilot_session.id
+        elif hasattr(_copilot_session, 'session_id'):
+            session_id = _copilot_session.session_id
+        elif hasattr(_copilot_session, '_id'):
+            session_id = _copilot_session._id
+    
     return jsonify({
         "status": "ok",
         "whisper_model": WHISPER_MODEL,
-        "piper_model": PIPER_MODEL_PATH.name if PIPER_MODEL_PATH.exists() else "not installed"
+        "piper_model": PIPER_MODEL_PATH.name if PIPER_MODEL_PATH.exists() else "not installed",
+        "session_id": session_id,
+        "session_active": _copilot_session is not None
     })
 
 
