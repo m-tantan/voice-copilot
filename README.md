@@ -1,78 +1,96 @@
 # 🎙️ Voice Copilot
 
-A Python-based web application for multi-turn voice interactions with the GitHub Copilot SDK.
+A Python-based web application for multi-turn voice interactions with the GitHub Copilot SDK. **Built 100% hands-free using voice commands while driving.**
 
 ## Features
 
-- **Voice Recording**: Hold button to record, or use wake words ("Copilot", "GitHub")
-- **Wake Word Detection**: Continuous listening via Web Speech API
-- **Stop Commands**: Say "stop", "done", "finish" to end recording
+- **Voice Recording**: Hold button to record, or use wake words ("GitHub")
+- **Wake Word Detection**: Say "GitHub" to start recording hands-free
+- **Stop Commands**: Say "stop", "done", "finish" to end recording, or click the button
 - **Local STT**: Speech-to-text using faster-whisper (Whisper base model)
 - **Local TTS**: Text-to-speech using pyttsx3 (Windows SAPI)
 - **Multi-turn Conversations**: Persistent sessions with Copilot SDK
+- **File System Access**: Copilot can read/write files in your project
+- **Health Monitoring**: Visual indicator shows server and mic status
 - **Privacy-first**: All voice processing done locally
 
 ## Quick Start
 
+### 1. Clone the repository
 ```bash
-# Navigate to the project
-cd mobile
+git clone https://github.com/m-tantan/voice-copilot.git
+cd voice-copilot
+```
 
-# Activate virtual environment
-.\.venv\Scripts\Activate.ps1  # Windows
-# source .venv/bin/activate   # Linux/Mac
+### 2. Create and activate virtual environment
+```bash
+# Windows
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 
-# Start the server
+# Linux/Mac
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+### 3. Install dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Download the Whisper model (first run only)
+The model (~150MB) downloads automatically on first use.
+
+### 5. Start the server
+```bash
 python app.py
 ```
 
-Then open http://localhost:5000 in your browser.
+### 6. Open in browser
+Navigate to **http://localhost:5000**
 
 ## Usage
 
-1. **Button Recording**: Hold the microphone button to record, release to process
-2. **Wake Words**: Say "Copilot" or "GitHub" to start recording hands-free
-3. **Stop Recording**: Say "stop", "done", or "finish" to end recording
-4. **Text Input**: Type directly in the chat box and press Enter or click Send
-5. **Voice + Edit**: After voice transcription, you have 2 seconds to edit before auto-send
+1. **Wake Word**: Say **"GitHub"** to start recording hands-free
+2. **Button Recording**: Hold the microphone button to record, release to stop
+3. **Stop Recording**: Say "stop", "done", or "finish" - or click the button
+4. **Text Input**: Type directly in the chat box and press Enter
+5. **Auto-send**: After voice transcription, you have 2 seconds to edit before auto-send
+
+## Health Indicator
+
+The footer shows connection status:
+- 🟢 **Green**: Server online, mic working - "Ready • Say GitHub to start"
+- 🟡 **Yellow**: Server online, mic permission needed
+- 🔴 **Red**: Server offline - run `python app.py`
 
 ## API Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/` | GET | Main web interface |
-| `/api/transcribe` | POST | Transcribe audio to text (multipart/form-data) |
-| `/api/speak` | POST | Convert text to speech (JSON) |
-| `/api/chat` | POST | Send message to Copilot (JSON) |
+| `/api/transcribe` | POST | Transcribe audio to text |
+| `/api/speak` | POST | Convert text to speech |
+| `/api/chat` | POST | Send message to Copilot |
 | `/api/health` | GET | Health check |
 
 ## Tech Stack
 
-- **Backend**: Flask
-- **STT**: faster-whisper (Whisper base model, ~150MB)
+- **Backend**: Flask + Python 3.9+
+- **STT**: faster-whisper (Whisper base model)
 - **TTS**: pyttsx3 (Windows SAPI voices)
-- **Copilot**: github-copilot-sdk
+- **AI**: github-copilot-sdk
 - **Frontend**: Vanilla JS with Web Audio API & Web Speech API
-
-## Running Tests
-
-```bash
-# Install test dependencies
-pip install pytest pytest-playwright
-playwright install chromium
-
-# Run tests (server must be running)
-pytest test_app.py -v
-```
 
 ## Project Structure
 
 ```
-mobile/
+voice-copilot/
 ├── app.py              # Flask backend
 ├── requirements.txt    # Python dependencies
 ├── test_app.py         # Playwright tests
-├── models/             # Voice models (auto-downloaded)
+├── LICENSE             # MIT License
+├── models/             # Voice models (downloaded on first run)
 ├── static/
 │   ├── app.js          # Frontend JavaScript
 │   └── style.css       # Styles
@@ -80,9 +98,17 @@ mobile/
     └── index.html      # Main page
 ```
 
+## Running Tests
+
+```bash
+pip install pytest pytest-playwright
+playwright install chromium
+pytest test_app.py -v  # Server must be running
+```
+
 ## Browser Support
 
-- **Chrome/Edge**: Full support (Web Speech API + Web Audio)
+- **Chrome/Edge**: Full support (recommended)
 - **Firefox**: Recording works, wake word detection limited
 - **Safari**: May require permissions prompt
 
