@@ -189,41 +189,51 @@ def chat():
         if any(word in message.lower() for word in ['file', 'folder', 'directory', 'drive', 'read', 'write', 'list', 'access']):
             enhanced_message = f"[Context: You have full access to the file system. Working directory is C:\\SOC. You can read, write, and list files.]\n\n{message}"
         
-        async def process_message():
+        async def process_message(retry_on_session_error=True):
             global _copilot_client, _copilot_session
             
-            # Create client if needed
-            if _copilot_client is None:
-                print("[CHAT] Creating new Copilot client...")
-                from copilot import CopilotClient
-                _copilot_client = CopilotClient()
-                await _copilot_client.start()
-                print("[CHAT] Client started")
-            
-            # Create session if needed
-            if _copilot_session is None:
-                print("[CHAT] Creating new session...")
-                _copilot_session = await _copilot_client.create_session({
-                    "model": "gpt-4",
-                    "streaming": False
-                })
-                print("[CHAT] Session created")
-            
-            print("[CHAT] Sending message to Copilot...")
-            response = await _copilot_session.send_and_wait({"prompt": enhanced_message})
-            print(f"[CHAT] Got response type: {type(response)}")
-            
-            # Handle SessionEvent response type
-            if hasattr(response, 'data') and hasattr(response.data, 'content'):
-                return response.data.content
-            elif hasattr(response, 'content'):
-                return response.content
-            elif hasattr(response, 'text'):
-                return response.text
-            elif isinstance(response, str):
-                return response
-            else:
-                return str(response)
+            try:
+                # Create client if needed
+                if _copilot_client is None:
+                    print("[CHAT] Creating new Copilot client...")
+                    from copilot import CopilotClient
+                    _copilot_client = CopilotClient()
+                    await _copilot_client.start()
+                    print("[CHAT] Client started")
+                
+                # Create session if needed
+                if _copilot_session is None:
+                    print("[CHAT] Creating new session...")
+                    _copilot_session = await _copilot_client.create_session({
+                        "model": "gpt-4",
+                        "streaming": False
+                    })
+                    print("[CHAT] Session created")
+                
+                print("[CHAT] Sending message to Copilot...")
+                response = await _copilot_session.send_and_wait({"prompt": enhanced_message})
+                print(f"[CHAT] Got response type: {type(response)}")
+                
+                # Handle SessionEvent response type
+                if hasattr(response, 'data') and hasattr(response.data, 'content'):
+                    return response.data.content
+                elif hasattr(response, 'content'):
+                    return response.content
+                elif hasattr(response, 'text'):
+                    return response.text
+                elif isinstance(response, str):
+                    return response
+                else:
+                    return str(response)
+            except Exception as e:
+                error_msg = str(e).lower()
+                # Check for session/auth errors that warrant a retry
+                if retry_on_session_error and any(x in error_msg for x in ['session', 'model', 'auth', 'aggregate']):
+                    print(f"[CHAT] Session error detected, resetting and retrying: {e}")
+                    _copilot_client = None
+                    _copilot_session = None
+                    return await process_message(retry_on_session_error=False)
+                raise
         
         response_text = run_async(process_message(), timeout=timeout)
         
