@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Copilot</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎙️ Voice Copilot</h1>
+            <p class="subtitle">Say "Copilot" or "GitHub" to start, or click the button</p>
+        </header>
+
+        <main>
+            <div class="status-container">
+                <div id="status" class="status">Ready</div>
+                <div id="wake-word-status" class="wake-word-status">
+                    <span class="indicator"></span>
+                    Listening for wake word...
+                </div>
+            </div>
+
+            <button id="record-btn" class="record-btn" aria-label="Start recording">
+                <svg class="mic-icon" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                    <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                </svg>
+                <span class="btn-text">Hold to Record</span>
+            </button>
+
+            <div class="conversation" id="conversation">
+                <!-- Conversation messages appear here -->
+            </div>
+
+            <div class="chat-input-container">
+                <textarea id="chat-input" class="chat-input" placeholder="Type a message or use voice..." rows="2"></textarea>
+                <button id="send-btn" class="send-btn" aria-label="Send message">
+                    <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+                        <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                    </svg>
+                </button>
+            </div>
+
+            <div id="transcript" class="transcript"></div>
+            <div id="auto-submit-timer" class="auto-submit-timer"></div>
+        </main>
+
+        <footer>
+            <div class="health-status" id="health-status">
+                <span class="health-indicator" id="health-indicator"></span>
+                <span id="health-text">Checking server...</span>
+            </div>
+            <p>🔒 All voice processing is done locally</p>
+        </footer>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
