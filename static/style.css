@@ -214,7 +214,6 @@ main {
     justify-content: center;
     width: 150px;
     height: 150px;
-    margin: 0 auto 2rem;
     border-radius: 50%;
     border: 3px solid var(--primary);
     background: linear-gradient(145deg, var(--card-bg), var(--card-bg-hover));
@@ -261,6 +260,58 @@ main {
     width: 48px;
     height: 48px;
     margin-bottom: 0.5rem;
+}
+
+/* Record controls container */
+.record-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+/* Push-to-talk toggle button */
+.ptt-toggle {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 60px;
+    height: 60px;
+    border-radius: 12px;
+    border: 2px solid var(--border);
+    background: var(--card-bg);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-size: 0.7rem;
+    font-weight: 600;
+}
+
+.ptt-toggle svg {
+    width: 24px;
+    height: 24px;
+    margin-bottom: 0.25rem;
+}
+
+.ptt-toggle:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+    background: var(--card-bg-hover);
+}
+
+.ptt-toggle.active {
+    background: linear-gradient(135deg, var(--primary), var(--gradient-2));
+    border-color: var(--primary);
+    color: white;
+    box-shadow: 0 0 20px var(--primary-glow);
+}
+
+.ptt-label {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
 
 .conversation {

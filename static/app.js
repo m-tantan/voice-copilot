@@ -7,6 +7,7 @@ class VoiceCopilot {
     constructor() {
         // DOM elements
         this.recordBtn = document.getElementById('record-btn');
+        this.pttToggle = document.getElementById('ptt-toggle');
         this.status = document.getElementById('status');
         this.wakeWordStatus = document.getElementById('wake-word-status');
         this.conversation = document.getElementById('conversation');
@@ -27,6 +28,7 @@ class VoiceCopilot {
         this.isVoiceInput = false;
         this.serverOnline = false;
         this.micPermission = false;
+        this.pushToTalkMode = false;  // PTT toggle state
 
         // Wake words
         this.wakeWords = ['copilot', 'github', 'hey copilot', 'hey github'];
@@ -41,28 +43,47 @@ class VoiceCopilot {
     init() {
         // Start health monitoring
         this.startHealthMonitor();
-        // Set up button handlers - click toggles for voice-triggered, hold for manual
+        
+        // Push-to-talk toggle handler
+        this.pttToggle.addEventListener('click', () => {
+            this.pushToTalkMode = !this.pushToTalkMode;
+            this.pttToggle.classList.toggle('active', this.pushToTalkMode);
+            this.updateRecordButtonText();
+            console.log('Push-to-talk mode:', this.pushToTalkMode ? 'ON' : 'OFF');
+        });
+        
+        // Set up button handlers - click toggles for voice-triggered or PTT mode, hold for manual
         this.recordBtn.addEventListener('click', (e) => {
             // If recording was triggered by voice, a click should stop it
             if (this.isRecording && this.triggeredByVoice) {
                 e.preventDefault();
                 this.stopRecording();
             }
+            // PTT mode: click to toggle recording
+            else if (this.pushToTalkMode && !this.triggeredByVoice) {
+                e.preventDefault();
+                if (this.isRecording) {
+                    this.stopRecording();
+                } else {
+                    this.startRecording(false);
+                }
+            }
         });
         
         this.recordBtn.addEventListener('mousedown', () => {
-            if (!this.isRecording) {
+            // Only use hold-to-record if NOT in PTT mode
+            if (!this.isRecording && !this.pushToTalkMode) {
                 this.startRecording(false);  // Button-triggered
             }
         });
         this.recordBtn.addEventListener('mouseup', () => {
-            // Only stop on mouseup if it was button-triggered (hold to record)
-            if (this.isRecording && !this.triggeredByVoice) {
+            // Only stop on mouseup if it was button-triggered (hold to record) and NOT in PTT mode
+            if (this.isRecording && !this.triggeredByVoice && !this.pushToTalkMode) {
                 this.stopRecording();
             }
         });
         this.recordBtn.addEventListener('mouseleave', () => {
-            if (this.isRecording && !this.triggeredByVoice) {
+            if (this.isRecording && !this.triggeredByVoice && !this.pushToTalkMode) {
                 this.stopRecording();
             }
         });
@@ -73,14 +94,21 @@ class VoiceCopilot {
             if (this.isRecording && this.triggeredByVoice) {
                 // Tap to stop voice-triggered recording
                 this.stopRecording();
+            } else if (this.pushToTalkMode) {
+                // PTT mode: tap to toggle
+                if (this.isRecording) {
+                    this.stopRecording();
+                } else {
+                    this.startRecording(false);
+                }
             } else if (!this.isRecording) {
                 this.startRecording(false);
             }
         });
         this.recordBtn.addEventListener('touchend', (e) => {
             e.preventDefault();
-            // Only stop on touchend if it was button-triggered
-            if (this.isRecording && !this.triggeredByVoice) {
+            // Only stop on touchend if it was button-triggered AND not in PTT mode
+            if (this.isRecording && !this.triggeredByVoice && !this.pushToTalkMode) {
                 this.stopRecording();
             }
         });
@@ -163,10 +191,8 @@ class VoiceCopilot {
                     if (text.includes(abort)) {
                         console.log('Abort word detected:', abort);
                         this.cancelAutoSubmit();
-                        this.transcript.textContent = `Aborted: "${abort}"`;
-                        this.chatInput.value = '';
-                        this.chatInput.classList.remove('voice-input');
-                        this.isVoiceInput = false;
+                        this.transcript.textContent = `Aborted: "${abort}" - text kept for editing`;
+                        // Keep the text in the input, just cancel auto-send
                         return;
                     }
                 }
@@ -578,9 +604,11 @@ class VoiceCopilot {
         switch (state) {
             case 'recording':
                 this.recordBtn.classList.add('recording');
-                // Show different text depending on how recording was triggered
+                // Show different text depending on how recording was triggered and mode
                 if (this.triggeredByVoice) {
                     this.recordBtn.querySelector('.btn-text').textContent = 'Click or say "stop"';
+                } else if (this.pushToTalkMode) {
+                    this.recordBtn.querySelector('.btn-text').textContent = 'Click to Stop';
                 } else {
                     this.recordBtn.querySelector('.btn-text').textContent = 'Release to stop';
                 }
@@ -598,9 +626,17 @@ class VoiceCopilot {
                 this.status.textContent = '🔊 Speaking';
                 break;
             default:
-                this.recordBtn.querySelector('.btn-text').textContent = 'Hold to Record';
+                this.updateRecordButtonText();
                 this.status.textContent = 'Ready';
                 this.triggeredByVoice = false;  // Reset on ready state
+        }
+    }
+
+    updateRecordButtonText() {
+        if (this.pushToTalkMode) {
+            this.recordBtn.querySelector('.btn-text').textContent = 'Click to Record';
+        } else {
+            this.recordBtn.querySelector('.btn-text').textContent = 'Hold to Record';
         }
     }
 
