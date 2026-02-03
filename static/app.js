@@ -59,8 +59,8 @@ class VoiceCopilot {
                 e.preventDefault();
                 this.stopRecording();
             }
-            // PTT mode: click to toggle recording
-            else if (this.pushToTalkMode && !this.triggeredByVoice) {
+            // PTT OFF mode: click to toggle recording
+            else if (!this.pushToTalkMode && !this.triggeredByVoice) {
                 e.preventDefault();
                 if (this.isRecording) {
                     this.stopRecording();
@@ -71,19 +71,19 @@ class VoiceCopilot {
         });
         
         this.recordBtn.addEventListener('mousedown', () => {
-            // Only use hold-to-record if NOT in PTT mode
-            if (!this.isRecording && !this.pushToTalkMode) {
+            // Only use hold-to-record if in PTT mode (PTT = hold to record)
+            if (!this.isRecording && this.pushToTalkMode) {
                 this.startRecording(false);  // Button-triggered
             }
         });
         this.recordBtn.addEventListener('mouseup', () => {
-            // Only stop on mouseup if it was button-triggered (hold to record) and NOT in PTT mode
-            if (this.isRecording && !this.triggeredByVoice && !this.pushToTalkMode) {
+            // Only stop on mouseup if it was button-triggered (hold to record) and in PTT mode
+            if (this.isRecording && !this.triggeredByVoice && this.pushToTalkMode) {
                 this.stopRecording();
             }
         });
         this.recordBtn.addEventListener('mouseleave', () => {
-            if (this.isRecording && !this.triggeredByVoice && !this.pushToTalkMode) {
+            if (this.isRecording && !this.triggeredByVoice && this.pushToTalkMode) {
                 this.stopRecording();
             }
         });
@@ -94,21 +94,22 @@ class VoiceCopilot {
             if (this.isRecording && this.triggeredByVoice) {
                 // Tap to stop voice-triggered recording
                 this.stopRecording();
-            } else if (this.pushToTalkMode) {
-                // PTT mode: tap to toggle
+            } else if (!this.pushToTalkMode) {
+                // PTT OFF mode: tap to toggle
                 if (this.isRecording) {
                     this.stopRecording();
                 } else {
                     this.startRecording(false);
                 }
             } else if (!this.isRecording) {
+                // PTT ON mode: hold to record (start on touch)
                 this.startRecording(false);
             }
         });
         this.recordBtn.addEventListener('touchend', (e) => {
             e.preventDefault();
-            // Only stop on touchend if it was button-triggered AND not in PTT mode
-            if (this.isRecording && !this.triggeredByVoice && !this.pushToTalkMode) {
+            // Only stop on touchend if it was button-triggered AND in PTT mode (hold behavior)
+            if (this.isRecording && !this.triggeredByVoice && this.pushToTalkMode) {
                 this.stopRecording();
             }
         });
@@ -608,9 +609,9 @@ class VoiceCopilot {
                 if (this.triggeredByVoice) {
                     this.recordBtn.querySelector('.btn-text').textContent = 'Click or say "stop"';
                 } else if (this.pushToTalkMode) {
-                    this.recordBtn.querySelector('.btn-text').textContent = 'Click to Stop';
-                } else {
                     this.recordBtn.querySelector('.btn-text').textContent = 'Release to stop';
+                } else {
+                    this.recordBtn.querySelector('.btn-text').textContent = 'Click to Stop';
                 }
                 this.status.classList.add('recording');
                 this.status.textContent = '🔴 Recording';
@@ -634,9 +635,9 @@ class VoiceCopilot {
 
     updateRecordButtonText() {
         if (this.pushToTalkMode) {
-            this.recordBtn.querySelector('.btn-text').textContent = 'Click to Record';
-        } else {
             this.recordBtn.querySelector('.btn-text').textContent = 'Hold to Record';
+        } else {
+            this.recordBtn.querySelector('.btn-text').textContent = 'Click to Record';
         }
     }
 
