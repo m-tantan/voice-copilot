@@ -30,8 +30,10 @@ class VoiceCopilot {
 
         // Wake words
         this.wakeWords = ['copilot', 'github', 'hey copilot', 'hey github'];
-        this.stopWords = ['stop', 'done', 'finish', 'end', 'that\'s all'];
+        this.stopWords = ['stop listening', 'done', 'finish', 'end', 'that\'s all'];
+        this.abortWords = ['abort', 'cancel', 'nevermind', 'never mind'];
         this.triggeredByVoice = false;
+        this.autoSubmitActive = false;
 
         this.init();
     }
@@ -154,6 +156,21 @@ class VoiceCopilot {
                     }
                 }
             }
+            
+            // Check for abort words during auto-submit countdown
+            if (this.autoSubmitActive) {
+                for (const abort of this.abortWords) {
+                    if (text.includes(abort)) {
+                        console.log('Abort word detected:', abort);
+                        this.cancelAutoSubmit();
+                        this.transcript.textContent = `Aborted: "${abort}"`;
+                        this.chatInput.value = '';
+                        this.chatInput.classList.remove('voice-input');
+                        this.isVoiceInput = false;
+                        return;
+                    }
+                }
+            }
         };
 
         this.recognition.onerror = (event) => {
@@ -169,9 +186,10 @@ class VoiceCopilot {
             // Restart recognition in these cases:
             // 1. Not recording - keep listening for wake words
             // 2. Recording triggered by voice - need to listen for "stop" command
+            // 3. Auto-submit countdown active - need to listen for "abort" command
             const shouldRestart = this.wakeWordActive && 
                                   !this.wakeWordStatus.classList.contains('inactive') &&
-                                  (!this.isRecording || this.triggeredByVoice);
+                                  (!this.isRecording || this.triggeredByVoice || this.autoSubmitActive);
             
             if (shouldRestart) {
                 setTimeout(() => {
@@ -337,17 +355,19 @@ class VoiceCopilot {
 
     startAutoSubmit() {
         this.cancelAutoSubmit();
-        let countdown = 2;
+        let countdown = 4;
+        this.autoSubmitActive = true;
         
-        this.autoSubmitTimer.textContent = `Auto-sending in ${countdown}s...`;
+        this.autoSubmitTimer.textContent = `Auto-sending in ${countdown}s... (say "abort" to cancel)`;
         
         const tick = () => {
             countdown--;
             if (countdown > 0) {
-                this.autoSubmitTimer.textContent = `Auto-sending in ${countdown}s...`;
+                this.autoSubmitTimer.textContent = `Auto-sending in ${countdown}s... (say "abort" to cancel)`;
                 this.autoSubmitTimeout = setTimeout(tick, 1000);
             } else {
                 this.autoSubmitTimer.textContent = '';
+                this.autoSubmitActive = false;
                 this.submitMessage();
             }
         };
@@ -360,6 +380,7 @@ class VoiceCopilot {
             clearTimeout(this.autoSubmitTimeout);
             this.autoSubmitTimeout = null;
         }
+        this.autoSubmitActive = false;
         this.autoSubmitTimer.textContent = '';
     }
 
