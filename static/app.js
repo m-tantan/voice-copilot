@@ -384,8 +384,30 @@ class VoiceCopilot {
         this.autoSubmitTimer.textContent = '';
     }
 
+    cleanStopWords(text) {
+        // Remove stop words from the end of the message (case-insensitive)
+        let cleaned = text;
+        const allStopWords = [...this.stopWords, ...this.abortWords];
+        
+        for (const word of allStopWords) {
+            // Remove from end of string (with optional trailing punctuation)
+            const endPattern = new RegExp(`\\s*${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[.!?,]*\\s*$`, 'i');
+            cleaned = cleaned.replace(endPattern, '');
+            
+            // Also remove if it appears at the start followed by comma/period
+            const startPattern = new RegExp(`^\\s*${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[.!?,]*\\s*`, 'i');
+            cleaned = cleaned.replace(startPattern, '');
+        }
+        
+        return cleaned.trim();
+    }
+
     async submitMessage() {
-        const message = this.chatInput.value.trim();
+        let message = this.chatInput.value.trim();
+        if (!message) return;
+
+        // Remove stop words that may have been captured in transcription
+        message = this.cleanStopWords(message);
         if (!message) return;
 
         this.cancelAutoSubmit();
