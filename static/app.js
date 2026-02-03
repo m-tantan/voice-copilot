@@ -599,6 +599,11 @@ class VoiceCopilot {
         try {
             const response = await this.sendToCopilot(message);
             this.addMessage('copilot', response.response);
+            
+            // Update session ID if returned
+            if (response.session_id) {
+                this.updateSessionId(response.session_id);
+            }
 
             // Stop wake word detection while speaking to prevent feedback loop
             this.stopWakeWordDetection();

@@ -255,9 +255,15 @@ def chat():
         voice_text = generate_voice_status(response_text)
         print(f"[CHAT] Voice text: {voice_text[:100]}...")
         
+        # Get session ID to return to frontend
+        session_id = None
+        if _copilot_session is not None and hasattr(_copilot_session, 'session_id'):
+            session_id = _copilot_session.session_id
+        
         return jsonify({
             "response": response_text,
-            "voice_status": voice_text
+            "voice_status": voice_text,
+            "session_id": session_id
         })
     except TimeoutError:
         print(f"[CHAT] TIMEOUT after {timeout}s")
