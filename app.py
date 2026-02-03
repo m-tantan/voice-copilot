@@ -4,6 +4,7 @@ import io
 import wave
 import tempfile
 import asyncio
+import uuid
 from pathlib import Path
 
 from flask import Flask, request, jsonify, send_file, render_template
@@ -20,6 +21,18 @@ MODELS_DIR = Path(__file__).parent / "models"
 WHISPER_MODEL = "base"
 PIPER_MODEL_PATH = MODELS_DIR / "en_US-amy-medium.onnx"
 PIPER_CONFIG_PATH = MODELS_DIR / "en_US-amy-medium.onnx.json"
+
+# Current working directory (shared state)
+_current_working_dir = r"C:\SOC"
+
+# Context usage tracking
+_context_stats = {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "turns": 0,
+    "start_time": None,
+    "max_tokens": 128000  # GPT-4 context window
+}
 
 # Lazy-loaded models
 _whisper_model = None
@@ -184,10 +197,8 @@ def chat():
     print(f"[CHAT] Received message: {message[:50]}... (timeout: {timeout}s)")
     
     try:
-        # Add context about file system access
-        enhanced_message = message
-        if any(word in message.lower() for word in ['file', 'folder', 'directory', 'drive', 'read', 'write', 'list', 'access']):
-            enhanced_message = f"[Context: You have full access to the file system. Working directory is C:\\SOC. You can read, write, and list files.]\n\n{message}"
+        # Add context about file system access - always include working directory
+        enhanced_message = f"[IMPORTANT: The user's current working directory is {_current_working_dir}. When asked about working directory or location, report this path. All file operations should be relative to this directory.]\n\n{message}"
         
         async def process_message(retry_on_session_error=True):
             global _copilot_client, _copilot_session
@@ -318,6 +329,306 @@ def health():
         "status": "ok",
         "whisper_model": WHISPER_MODEL,
         "piper_model": PIPER_MODEL_PATH.name if PIPER_MODEL_PATH.exists() else "not installed"
+    })
+
+
+@app.route("/api/session/reset", methods=["POST"])
+def reset_session():
+    """Reset the Copilot session for a fresh conversation"""
+    global _copilot_session
+    _copilot_session = None
+    print("[SESSION] Session reset by user")
+    return jsonify({
+        "success": True,
+        "message": "Session reset successfully"
+    })
+
+
+@app.route("/api/cwd", methods=["GET"])
+def get_cwd():
+    """Get current working directory"""
+    global _current_working_dir
+    return jsonify({
+        "cwd": _current_working_dir,
+        "segments": _current_working_dir.replace("/", "\\").split("\\")
+    })
+
+
+@app.route("/api/cwd", methods=["POST"])
+def set_cwd():
+    """Set current working directory"""
+    global _current_working_dir, _copilot_session
+    
+    data = request.get_json()
+    if not data or "path" not in data:
+        return jsonify({"error": "No path provided"}), 400
+    
+    new_path = data["path"].replace("/", "\\")
+    
+    # Validate path exists
+    if not os.path.isdir(new_path):
+        return jsonify({"error": f"Directory does not exist: {new_path}"}), 400
+    
+    _current_working_dir = os.path.abspath(new_path)
+    
+    # Reset Copilot session so it picks up new working directory
+    _copilot_session = None
+    
+    return jsonify({
+        "cwd": _current_working_dir,
+        "segments": _current_working_dir.split("\\")
+    })
+
+
+# Base directory for directory suggestions (will be updated dynamically)
+CWD_BASE_PATH = r"C:\SOC"
+
+
+@app.route("/api/filesystem/home", methods=["GET"])
+def get_home_directory():
+    """Get the user's home directory from the OS"""
+    home = os.path.expanduser("~")
+    return jsonify({
+        "path": home,
+        "name": os.path.basename(home) or home
+    })
+
+
+@app.route("/api/filesystem/browse", methods=["GET"])
+def browse_filesystem():
+    """Browse the file system - list directories at a given path"""
+    path = request.args.get("path", os.path.expanduser("~"))
+    
+    # Handle drive root on Windows
+    if path and len(path) == 2 and path[1] == ':':
+        path = path + "\\"
+    
+    try:
+        path = os.path.abspath(path)
+        
+        if not os.path.isdir(path):
+            return jsonify({"error": f"Not a directory: {path}"}), 400
+        
+        entries = []
+        try:
+            for entry in os.scandir(path):
+                if entry.is_dir() and not entry.name.startswith('.'):
+                    try:
+                        # Check if we can access the directory
+                        has_children = any(
+                            e.is_dir() for e in os.scandir(entry.path) 
+                            if not e.name.startswith('.')
+                        )
+                    except (PermissionError, OSError):
+                        has_children = False
+                    
+                    entries.append({
+                        "name": entry.name,
+                        "path": entry.path,
+                        "hasChildren": has_children
+                    })
+        except PermissionError:
+            return jsonify({"error": f"Permission denied: {path}"}), 403
+        
+        # Sort alphabetically, case-insensitive
+        entries.sort(key=lambda x: x["name"].lower())
+        
+        # Get parent path
+        parent = os.path.dirname(path)
+        if parent == path:  # At root
+            parent = None
+        
+        return jsonify({
+            "path": path,
+            "parent": parent,
+            "entries": entries
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/filesystem/drives", methods=["GET"])
+def list_drives():
+    """List available drives (Windows) or root (Unix)"""
+    import platform
+    
+    if platform.system() == "Windows":
+        import string
+        drives = []
+        for letter in string.ascii_uppercase:
+            drive = f"{letter}:\\"
+            if os.path.exists(drive):
+                drives.append({
+                    "name": f"{letter}:",
+                    "path": drive,
+                    "hasChildren": True
+                })
+        return jsonify({"drives": drives})
+    else:
+        return jsonify({"drives": [{"name": "/", "path": "/", "hasChildren": True}]})
+
+
+@app.route("/api/directories", methods=["GET"])
+def list_directories():
+    """List all directories under the base path"""
+    base = request.args.get("base", CWD_BASE_PATH)
+    max_depth = int(request.args.get("depth", 2))
+    
+    directories = []
+    base_path = Path(base)
+    
+    if not base_path.exists():
+        return jsonify({"error": f"Base path does not exist: {base}"}), 400
+    
+    def scan_dirs(path, current_depth):
+        if current_depth > max_depth:
+            return
+        try:
+            for entry in path.iterdir():
+                if entry.is_dir() and not entry.name.startswith('.'):
+                    directories.append(str(entry))
+                    scan_dirs(entry, current_depth + 1)
+        except PermissionError:
+            pass
+    
+    scan_dirs(base_path, 1)
+    
+    return jsonify({
+        "base": base,
+        "directories": sorted(directories)
+    })
+
+
+@app.route("/api/cwd/suggest", methods=["POST"])
+def suggest_cwd():
+    """Use Copilot to suggest directories based on voice input"""
+    global _copilot_client, _copilot_session
+    
+    data = request.get_json()
+    if not data or "query" not in data:
+        return jsonify({"error": "No query provided"}), 400
+    
+    query = data["query"]
+    base = data.get("base", CWD_BASE_PATH)
+    
+    # Get available directories
+    directories = []
+    base_path = Path(base)
+    
+    def scan_dirs(path, current_depth, max_depth=2):
+        if current_depth > max_depth:
+            return
+        try:
+            for entry in path.iterdir():
+                if entry.is_dir() and not entry.name.startswith('.'):
+                    directories.append(str(entry))
+                    scan_dirs(entry, current_depth + 1, max_depth)
+        except PermissionError:
+            pass
+    
+    if base_path.exists():
+        scan_dirs(base_path, 1)
+    
+    if not directories:
+        return jsonify({"error": "No directories found"}), 404
+    
+    # Ask Copilot to match the voice input to directories
+    prompt = f"""The user said (via voice, may be phonetically similar): "{query}"
+
+Available directories:
+{chr(10).join(directories)}
+
+Based on phonetic similarity and likely intent, return EXACTLY 3 directory paths that best match what the user likely meant. Return ONLY the full paths, one per line, no numbering or explanation. If fewer than 3 match well, still return 3 (pick closest alternatives)."""
+
+    try:
+        async def get_suggestions():
+            global _copilot_client, _copilot_session
+            
+            if _copilot_client is None:
+                from copilot import CopilotClient
+                _copilot_client = CopilotClient()
+                await _copilot_client.start()
+            
+            if _copilot_session is None:
+                _copilot_session = await _copilot_client.create_session({
+                    "intent": "directory-matching",
+                    "skills": []
+                })
+            
+            response = await _copilot_session.send_message(prompt, model="gpt-4", streaming=False)
+            
+            # Extract content from response
+            content = ""
+            if hasattr(response, 'content'):
+                content = response.content
+            elif hasattr(response, 'text'):
+                content = response.text
+            elif isinstance(response, str):
+                content = response
+            else:
+                for event in response:
+                    if hasattr(event, 'content'):
+                        content += event.content
+            
+            return content
+        
+        result = run_async(get_suggestions(), timeout=30)
+        
+        # Parse the response into directory options
+        lines = [line.strip() for line in result.strip().split('\n') if line.strip()]
+        # Filter to only valid directories
+        options = [line for line in lines if os.path.isdir(line)][:3]
+        
+        if not options:
+            # Fallback: return first 3 directories
+            options = directories[:3]
+        
+        return jsonify({
+            "query": query,
+            "options": [{"index": i + 1, "path": opt, "name": os.path.basename(opt)} for i, opt in enumerate(options)]
+        })
+        
+    except Exception as e:
+        print(f"[CWD/SUGGEST] Error: {e}")
+        # Fallback: simple substring matching
+        query_lower = query.lower().replace(" ", "")
+        matches = []
+        for d in directories:
+            name_lower = os.path.basename(d).lower().replace("-", "").replace("_", "")
+            if any(part in name_lower for part in query_lower.split()):
+                matches.append(d)
+        
+        options = (matches or directories)[:3]
+        return jsonify({
+            "query": query,
+            "options": [{"index": i + 1, "path": opt, "name": os.path.basename(opt)} for i, opt in enumerate(options)],
+            "fallback": True
+        })
+
+
+@app.route("/api/cwd/select", methods=["POST"])
+def select_cwd():
+    """Select a directory from suggestions and update CWD"""
+    global _current_working_dir, _copilot_session
+    
+    data = request.get_json()
+    if not data or "path" not in data:
+        return jsonify({"error": "No path provided"}), 400
+    
+    new_path = data["path"].replace("/", "\\")
+    
+    if not os.path.isdir(new_path):
+        return jsonify({"error": f"Directory does not exist: {new_path}"}), 400
+    
+    _current_working_dir = os.path.abspath(new_path)
+    _copilot_session = None  # Reset session for new context
+    
+    return jsonify({
+        "success": True,
+        "cwd": _current_working_dir,
+        "segments": _current_working_dir.split("\\"),
+        "message": f"Changed to {os.path.basename(_current_working_dir)}"
     })
 
 

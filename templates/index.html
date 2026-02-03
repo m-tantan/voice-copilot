@@ -13,12 +13,34 @@
             <h1>🎙️ Voice Copilot</h1>
             <p class="subtitle">I made this entire app verbally while driving.</p>
             <p class="subtitle highlight">No hands at all. Just voice.</p>
+            <div class="header-controls">
+                <button id="new-session-btn" class="new-session-btn" title="Start a new conversation">
+                    🔄 New Session
+                </button>
+                <button id="context-btn" class="context-btn" title="View context usage">
+                    <svg class="context-donut" viewBox="0 0 36 36">
+                        <circle class="donut-bg" cx="18" cy="18" r="15.9" fill="none" stroke-width="3"/>
+                        <circle class="donut-fill" cx="18" cy="18" r="15.9" fill="none" stroke-width="3"
+                                stroke-dasharray="0, 100" id="donut-fill"/>
+                    </svg>
+                    <span class="context-percent" id="context-percent">0%</span>
+                </button>
+            </div>
         </header>
+
+        <div class="cwd-visualizer" id="cwd-visualizer">
+            <span class="cwd-icon">📁</span>
+            <div class="cwd-breadcrumbs" id="cwd-breadcrumbs">
+                <!-- Breadcrumb segments will be populated by JS -->
+            </div>
+            <span id="mute-badge" class="mute-badge">🔊</span>
+        </div>
 
         <main>
             <div class="demo-notice">
                 <span class="pulse-dot"></span>
                 Built 100% hands-free using GitHub Copilot
+                <div class="session-id" id="session-id">Session: <span id="session-id-value">--</span></div>
             </div>
 
             <div class="status-container">
@@ -62,6 +84,66 @@
             <div id="transcript" class="transcript"></div>
             <div id="auto-submit-timer" class="auto-submit-timer"></div>
         </main>
+
+        <!-- Folder Picker Modal -->
+        <div id="folder-picker-modal" class="modal-overlay" style="display: none;">
+            <div class="modal-content folder-picker-content">
+                <h2>📁 Select Working Directory</h2>
+                <p class="folder-picker-desc">Choose the folder where Copilot will operate.</p>
+                
+                <div class="folder-picker-nav">
+                    <button id="folder-picker-up" class="folder-nav-btn" title="Go to parent">⬆️ Up</button>
+                    <button id="folder-picker-home" class="folder-nav-btn" title="Go to home">🏠 Home</button>
+                    <button id="folder-picker-drives" class="folder-nav-btn" title="Show drives">💾 Drives</button>
+                </div>
+                
+                <div class="folder-picker-current" id="folder-picker-current">
+                    Loading...
+                </div>
+                
+                <div class="folder-tree" id="folder-tree">
+                    <!-- Folder tree will be populated by JS -->
+                </div>
+                
+                <div class="folder-picker-actions">
+                    <button id="folder-picker-select" class="primary-btn">Select This Folder</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Context Usage Modal -->
+        <div id="context-modal" class="modal-overlay" style="display: none;">
+            <div class="modal-content context-modal">
+                <h2>📊 Context Usage</h2>
+                <div class="context-stats">
+                    <div class="context-stat-row">
+                        <span class="context-stat-label">📥 Input Tokens</span>
+                        <span class="context-stat-value" id="stat-input-tokens">0</span>
+                    </div>
+                    <div class="context-stat-row">
+                        <span class="context-stat-label">📤 Output Tokens</span>
+                        <span class="context-stat-value" id="stat-output-tokens">0</span>
+                    </div>
+                    <div class="context-stat-row">
+                        <span class="context-stat-label">💬 Turns</span>
+                        <span class="context-stat-value" id="stat-turns">0</span>
+                    </div>
+                    <div class="context-stat-row">
+                        <span class="context-stat-label">⏱️ Duration</span>
+                        <span class="context-stat-value" id="stat-duration">0:00</span>
+                    </div>
+                </div>
+                <div class="context-progress-bar">
+                    <div class="context-progress-fill" id="context-progress-fill" style="width: 0%"></div>
+                </div>
+                <div class="context-summary" id="context-summary">
+                    0 / 128,000 tokens used
+                </div>
+                <div class="folder-picker-actions">
+                    <button id="context-modal-close" class="primary-btn">Close</button>
+                </div>
+            </div>
+        </div>
 
         <!-- First Run Experience Modal -->
         <div id="first-run-modal" class="modal-overlay" style="display: none;">

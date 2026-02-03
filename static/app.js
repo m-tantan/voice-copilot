@@ -17,6 +17,19 @@ class VoiceCopilot {
         this.autoSubmitTimer = document.getElementById('auto-submit-timer');
         this.healthIndicator = document.getElementById('health-indicator');
         this.healthText = document.getElementById('health-text');
+        this.cwdBreadcrumbs = document.getElementById('cwd-breadcrumbs');
+        this.muteBadge = document.getElementById('mute-badge');
+        this.sessionIdValue = document.getElementById('session-id-value');
+        
+        // Folder picker elements
+        this.folderPickerModal = document.getElementById('folder-picker-modal');
+        this.folderTree = document.getElementById('folder-tree');
+        this.folderPickerCurrent = document.getElementById('folder-picker-current');
+        this.folderPickerUp = document.getElementById('folder-picker-up');
+        this.folderPickerHome = document.getElementById('folder-picker-home');
+        this.folderPickerDrives = document.getElementById('folder-picker-drives');
+        this.folderPickerSelect = document.getElementById('folder-picker-select');
+        this.currentBrowsePath = null;
 
         // State
         this.isRecording = false;
@@ -29,6 +42,8 @@ class VoiceCopilot {
         this.serverOnline = false;
         this.micPermission = false;
         this.pushToTalkMode = false;  // PTT toggle state
+        this.isMuted = false;  // TTS mute state
+        this.currentAudio = null;  // Current playing audio for stopping mid-speech
 
         // Wake words
         this.wakeWords = ['copilot', 'github', 'hey copilot', 'hey github'];
@@ -39,12 +54,43 @@ class VoiceCopilot {
         this.autoSubmitActive = false;
         this.pendingExtendText = '';  // Text to prepend when extending
 
+        // Directory change detection
+        this.cdKeywords = ['change directory', 'change working directory', 'cd to', 'switch to folder', 'go to folder', 'open folder', 'navigate to'];
+        this.selectionWords = {
+            'option 1': 0, 'option one': 0, 'first': 0, 'first one': 0,
+            'option 2': 1, 'option two': 1, 'second': 1, 'second one': 1,
+            'option 3': 2, 'option three': 2, 'third': 2, 'third one': 2
+        };
+        this.isSelectingDirectory = false;
+
+        // Mute/unmute keywords
+        this.muteKeywords = ['mute copilot', 'mute voice', 'go silent', 'be quiet', 'silence'];
+        this.unmuteKeywords = ['unmute copilot', 'unmute voice', 'speak again', 'voice on'];
+        this.pendingDirectoryOptions = [];
+
         this.init();
     }
 
     init() {
+        // Generate and display session ID
+        this.generateSessionId();
+        
+        // Check for saved working directory or show picker
+        this.initWorkingDirectory();
+        
         // Check for first run experience
         this.checkFirstRun();
+        
+        // Initialize mute badge
+        this.updateMuteBadge();
+        if (this.muteBadge) {
+            this.muteBadge.addEventListener('click', () => {
+                this.handleMuteCommand(this.isMuted ? 'unmute' : 'mute');
+            });
+        }
+        
+        // Initialize folder picker buttons
+        this.initFolderPicker();
         
         // Start health monitoring
         this.startHealthMonitor();
@@ -141,6 +187,19 @@ class VoiceCopilot {
         this.checkSupport();
     }
 
+    generateSessionId() {
+        // Generate a short random session ID
+        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';  // Avoiding confusing chars
+        let id = '';
+        for (let i = 0; i < 6; i++) {
+            id += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        this.sessionId = id;
+        if (this.sessionIdValue) {
+            this.sessionIdValue.textContent = id;
+        }
+    }
+
     checkFirstRun() {
         const hasSeenIntro = localStorage.getItem('voiceCopilot_hasSeenIntro');
         
@@ -192,6 +251,17 @@ class VoiceCopilot {
         this.recognition.onresult = (event) => {
             const last = event.results[event.results.length - 1];
             const text = last[0].transcript.toLowerCase().trim();
+            
+            // Check for mute/unmute commands (only when not recording)
+            if (!this.isRecording) {
+                const muteAction = this.detectMuteCommand(text);
+                if (muteAction) {
+                    console.log('Mute command detected:', muteAction);
+                    this.transcript.textContent = muteAction === 'mute' ? 'Muting voice...' : 'Unmuting voice...';
+                    this.handleMuteCommand(muteAction);
+                    return;
+                }
+            }
             
             // Check for wake words (only when not recording)
             if (!this.isRecording) {
@@ -486,6 +556,34 @@ class VoiceCopilot {
         message = this.cleanStopWords(message);
         if (!message) return;
 
+        // Check if we're in directory selection mode
+        if (this.isSelectingDirectory) {
+            const selection = this.checkDirectorySelection(message);
+            if (selection !== null) {
+                this.cancelAutoSubmit();
+                this.chatInput.value = '';
+                await this.selectDirectory(selection);
+                return;
+            }
+            // Check for cancel
+            if (this.abortWords.some(w => message.toLowerCase().includes(w))) {
+                this.cancelDirectorySelection();
+                return;
+            }
+        }
+
+        // Check if this is a directory change command
+        const cdMatch = this.detectCdCommand(message);
+        if (cdMatch) {
+            this.cancelAutoSubmit();
+            this.chatInput.value = '';
+            this.chatInput.classList.remove('voice-input');
+            this.isVoiceInput = false;
+            this.transcript.textContent = '';
+            await this.handleCdCommand(cdMatch);
+            return;
+        }
+
         this.cancelAutoSubmit();
         this.chatInput.value = '';
         this.chatInput.classList.remove('voice-input');
@@ -513,6 +611,9 @@ class VoiceCopilot {
 
             this.updateUI('ready');
             
+            // Refresh CWD in case it changed
+            this.fetchCwd();
+            
             // Resume wake word detection after speaking
             this.startWakeWordDetection();
         } catch (error) {
@@ -523,6 +624,434 @@ class VoiceCopilot {
         }
 
         this.sendBtn.disabled = false;
+    }
+
+    async fetchCwd() {
+        try {
+            const response = await fetch('/api/cwd');
+            if (response.ok) {
+                const data = await response.json();
+                this.renderCwdBreadcrumbs(data.segments);
+            }
+        } catch (error) {
+            console.warn('Could not fetch CWD:', error);
+            this.cwdBreadcrumbs.innerHTML = '<span class="cwd-loading">Loading...</span>';
+        }
+    }
+
+    renderCwdBreadcrumbs(segments) {
+        if (!this.cwdBreadcrumbs || !segments || segments.length === 0) return;
+        
+        this.cwdBreadcrumbs.innerHTML = '';
+        
+        segments.forEach((segment, index) => {
+            if (!segment) return;
+            
+            // Add separator before segments (except first)
+            if (index > 0) {
+                const sep = document.createElement('span');
+                sep.className = 'cwd-separator';
+                sep.textContent = '>';
+                this.cwdBreadcrumbs.appendChild(sep);
+            }
+            
+            const segEl = document.createElement('span');
+            segEl.className = 'cwd-segment';
+            if (index === segments.length - 1) {
+                segEl.classList.add('current');
+            }
+            segEl.textContent = segment;
+            
+            // Click to navigate to that path
+            const pathToHere = segments.slice(0, index + 1).join('\\');
+            segEl.addEventListener('click', () => this.changeCwd(pathToHere));
+            
+            this.cwdBreadcrumbs.appendChild(segEl);
+        });
+    }
+
+    async changeCwd(newPath) {
+        try {
+            const response = await fetch('/api/cwd', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path: newPath })
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                this.renderCwdBreadcrumbs(data.segments);
+                this.transcript.textContent = `Changed to: ${data.cwd}`;
+            } else {
+                const error = await response.json();
+                this.showError(error.error || 'Could not change directory');
+            }
+        } catch (error) {
+            console.error('Error changing CWD:', error);
+            this.showError('Could not change directory');
+        }
+    }
+
+    // Mute/unmute voice command methods
+    detectMuteCommand(message) {
+        const lowerMsg = message.toLowerCase();
+        for (const keyword of this.muteKeywords) {
+            if (lowerMsg.includes(keyword)) {
+                return 'mute';
+            }
+        }
+        for (const keyword of this.unmuteKeywords) {
+            if (lowerMsg.includes(keyword)) {
+                return 'unmute';
+            }
+        }
+        return null;
+    }
+
+    handleMuteCommand(action) {
+        if (action === 'mute') {
+            this.isMuted = true;
+            this.stopCurrentAudio();
+            this.updateMuteBadge();
+            this.addMessage('copilot', '🔇 Voice muted. Say "unmute copilot" to re-enable.');
+            this.transcript.textContent = 'Voice muted';
+        } else {
+            this.isMuted = false;
+            this.updateMuteBadge();
+            this.addMessage('copilot', '🔊 Voice unmuted.');
+            this.speak('Voice unmuted');
+            this.transcript.textContent = 'Voice unmuted';
+        }
+        this.updateUI('ready');
+        this.startWakeWordDetection();
+    }
+
+    updateMuteBadge() {
+        if (this.muteBadge) {
+            this.muteBadge.classList.toggle('active', this.isMuted);
+            this.muteBadge.textContent = this.isMuted ? '🔇 Muted' : '🔊';
+        }
+    }
+
+    stopCurrentAudio() {
+        if (this.currentAudio) {
+            this.currentAudio.pause();
+            this.currentAudio.currentTime = 0;
+            this.currentAudio = null;
+        }
+        // Also stop browser TTS if active
+        if ('speechSynthesis' in window) {
+            speechSynthesis.cancel();
+        }
+    }
+
+    // Folder picker methods
+    async initWorkingDirectory() {
+        const savedCwd = localStorage.getItem('voiceCopilot_cwd');
+        
+        if (savedCwd) {
+            // Restore saved directory
+            try {
+                const response = await fetch('/api/cwd', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: savedCwd })
+                });
+                
+                if (response.ok) {
+                    this.fetchCwd();
+                    return;
+                }
+            } catch (error) {
+                console.warn('Could not restore saved CWD:', error);
+            }
+        }
+        
+        // No saved directory or restore failed - show picker
+        this.showFolderPicker();
+    }
+
+    initFolderPicker() {
+        if (this.folderPickerUp) {
+            this.folderPickerUp.addEventListener('click', () => this.browseParent());
+        }
+        if (this.folderPickerHome) {
+            this.folderPickerHome.addEventListener('click', () => this.browseHome());
+        }
+        if (this.folderPickerDrives) {
+            this.folderPickerDrives.addEventListener('click', () => this.browseDrives());
+        }
+        if (this.folderPickerSelect) {
+            this.folderPickerSelect.addEventListener('click', () => this.selectFolder());
+        }
+        
+        // Also make CWD breadcrumbs clickable to open picker
+        if (this.cwdBreadcrumbs) {
+            this.cwdBreadcrumbs.parentElement.addEventListener('dblclick', () => {
+                this.showFolderPicker();
+            });
+        }
+    }
+
+    async showFolderPicker() {
+        if (this.folderPickerModal) {
+            this.folderPickerModal.style.display = 'flex';
+            
+            // Start at saved path, current CWD, or home
+            const savedCwd = localStorage.getItem('voiceCopilot_cwd');
+            if (savedCwd) {
+                this.browsePath(savedCwd);
+            } else {
+                this.browseHome();
+            }
+        }
+    }
+
+    hideFolderPicker() {
+        if (this.folderPickerModal) {
+            this.folderPickerModal.style.display = 'none';
+        }
+    }
+
+    async browseHome() {
+        try {
+            const response = await fetch('/api/filesystem/home');
+            if (response.ok) {
+                const data = await response.json();
+                this.browsePath(data.path);
+            }
+        } catch (error) {
+            console.error('Error getting home directory:', error);
+        }
+    }
+
+    async browseDrives() {
+        try {
+            const response = await fetch('/api/filesystem/drives');
+            if (response.ok) {
+                const data = await response.json();
+                this.currentBrowsePath = null;
+                this.folderPickerCurrent.textContent = 'Drives';
+                this.folderPickerUp.disabled = true;
+                this.renderFolderTree(data.drives);
+            }
+        } catch (error) {
+            console.error('Error getting drives:', error);
+        }
+    }
+
+    async browseParent() {
+        if (this.currentBrowsePath) {
+            const parent = this.currentBrowsePath.split('\\').slice(0, -1).join('\\');
+            if (parent) {
+                this.browsePath(parent);
+            } else {
+                this.browseDrives();
+            }
+        }
+    }
+
+    async browsePath(path) {
+        try {
+            const response = await fetch(`/api/filesystem/browse?path=${encodeURIComponent(path)}`);
+            if (response.ok) {
+                const data = await response.json();
+                this.currentBrowsePath = data.path;
+                this.folderPickerCurrent.textContent = data.path;
+                this.folderPickerUp.disabled = !data.parent;
+                this.renderFolderTree(data.entries);
+            } else {
+                const error = await response.json();
+                this.folderTree.innerHTML = `<div class="folder-empty">Error: ${error.error}</div>`;
+            }
+        } catch (error) {
+            console.error('Error browsing path:', error);
+            this.folderTree.innerHTML = `<div class="folder-empty">Error loading directory</div>`;
+        }
+    }
+
+    renderFolderTree(entries) {
+        if (!this.folderTree) return;
+        
+        if (!entries || entries.length === 0) {
+            this.folderTree.innerHTML = '<div class="folder-empty">No subfolders</div>';
+            return;
+        }
+        
+        this.folderTree.innerHTML = '';
+        
+        entries.forEach(entry => {
+            const item = document.createElement('div');
+            item.className = 'folder-item';
+            item.innerHTML = `
+                <span class="folder-icon">📁</span>
+                <span class="folder-name">${entry.name}</span>
+                ${entry.hasChildren ? '<span class="folder-expand">▶</span>' : ''}
+            `;
+            
+            item.addEventListener('click', () => {
+                // Navigate into folder on single click
+                this.browsePath(entry.path);
+            });
+            
+            this.folderTree.appendChild(item);
+        });
+    }
+
+    async selectFolder() {
+        const path = this.currentBrowsePath;
+        if (!path) return;
+        
+        try {
+            const response = await fetch('/api/cwd', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path })
+            });
+            
+            if (response.ok) {
+                // Save to localStorage
+                localStorage.setItem('voiceCopilot_cwd', path);
+                
+                this.hideFolderPicker();
+                this.fetchCwd();
+                this.transcript.textContent = `Working directory set to: ${path}`;
+            } else {
+                const error = await response.json();
+                this.transcript.textContent = error.error || 'Could not set directory';
+            }
+        } catch (error) {
+            console.error('Error selecting folder:', error);
+        }
+    }
+
+    // Directory change voice command methods
+    detectCdCommand(message) {
+        const lowerMsg = message.toLowerCase();
+        for (const keyword of this.cdKeywords) {
+            const idx = lowerMsg.indexOf(keyword);
+            if (idx !== -1) {
+                // Extract the directory query after the keyword
+                const query = message.slice(idx + keyword.length).trim();
+                return query || null;
+            }
+        }
+        return null;
+    }
+
+    async handleCdCommand(query) {
+        this.updateUI('processing');
+        this.status.innerHTML = 'Finding directories<span class="loading"></span>';
+        this.addMessage('user', `Change directory to: ${query}`);
+
+        try {
+            const response = await fetch('/api/cwd/suggest', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Could not find directories');
+            }
+
+            const data = await response.json();
+            this.pendingDirectoryOptions = data.options;
+            this.showDirectoryOptions(data.options);
+
+        } catch (error) {
+            console.error('Error finding directories:', error);
+            this.showError('Could not find matching directories');
+            this.updateUI('ready');
+            this.startWakeWordDetection();
+        }
+    }
+
+    showDirectoryOptions(options) {
+        this.isSelectingDirectory = true;
+        
+        // Build options message
+        let optionsText = 'Which directory?\n\n';
+        options.forEach((opt, i) => {
+            optionsText += `Option ${i + 1}: ${opt.name}\n`;
+        });
+        optionsText += '\nSay "option 1", "option 2", or "option 3" to select, or "cancel" to abort.';
+        
+        this.addMessage('copilot', optionsText);
+
+        // Speak the options
+        const speakText = options.map((opt, i) => `Option ${i + 1}: ${opt.name}`).join('. ');
+        this.updateUI('speaking');
+        this.speak(`Which directory? ${speakText}. Say option 1, 2, or 3 to select.`).then(() => {
+            this.updateUI('ready');
+            this.startWakeWordDetection();
+        });
+    }
+
+    checkDirectorySelection(message) {
+        const lowerMsg = message.toLowerCase().trim();
+        for (const [phrase, index] of Object.entries(this.selectionWords)) {
+            if (lowerMsg.includes(phrase)) {
+                return index;
+            }
+        }
+        return null;
+    }
+
+    async selectDirectory(index) {
+        if (index < 0 || index >= this.pendingDirectoryOptions.length) {
+            this.showError('Invalid option');
+            return;
+        }
+
+        const selected = this.pendingDirectoryOptions[index];
+        this.isSelectingDirectory = false;
+        this.pendingDirectoryOptions = [];
+
+        this.updateUI('processing');
+        this.status.innerHTML = 'Changing directory<span class="loading"></span>';
+
+        try {
+            const response = await fetch('/api/cwd/select', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path: selected.path })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Could not change directory');
+            }
+
+            const data = await response.json();
+            this.renderCwdBreadcrumbs(data.segments);
+            
+            const confirmMsg = `Changed to ${data.message}`;
+            this.addMessage('copilot', confirmMsg);
+            
+            this.updateUI('speaking');
+            await this.speak(confirmMsg);
+            this.updateUI('ready');
+            this.startWakeWordDetection();
+
+        } catch (error) {
+            console.error('Error selecting directory:', error);
+            this.showError('Could not change directory');
+            this.updateUI('ready');
+            this.startWakeWordDetection();
+        }
+    }
+
+    cancelDirectorySelection() {
+        this.isSelectingDirectory = false;
+        this.pendingDirectoryOptions = [];
+        this.cancelAutoSubmit();
+        this.chatInput.value = '';
+        this.transcript.textContent = 'Directory selection cancelled';
+        this.addMessage('copilot', 'Directory selection cancelled.');
+        this.updateUI('ready');
+        this.startWakeWordDetection();
     }
 
     async convertToWav(blob) {
@@ -570,6 +1099,12 @@ class VoiceCopilot {
     }
 
     async speak(text) {
+        // Check if muted - skip TTS entirely
+        if (this.isMuted) {
+            console.log('[SPEAK] Muted, skipping TTS');
+            return;
+        }
+
         console.log('[SPEAK] Speaking text:', text);
         try {
             const response = await fetch('/api/speak', {
@@ -588,16 +1123,19 @@ class VoiceCopilot {
             console.log('TTS audio blob size:', audioBlob.size);
             const audioUrl = URL.createObjectURL(audioBlob);
             const audio = new Audio(audioUrl);
+            this.currentAudio = audio;  // Track for mute interruption
             
             return new Promise((resolve) => {
                 audio.onended = () => {
                     console.log('TTS audio playback ended');
                     URL.revokeObjectURL(audioUrl);
+                    this.currentAudio = null;
                     resolve();
                 };
                 audio.onerror = (e) => {
                     console.error('TTS audio error:', e);
                     URL.revokeObjectURL(audioUrl);
+                    this.currentAudio = null;
                     this.speakWithBrowserTTS(text);
                     resolve();
                 };
@@ -605,6 +1143,7 @@ class VoiceCopilot {
                     console.log('TTS audio playing');
                 }).catch((e) => {
                     console.error('TTS play() failed:', e);
+                    this.currentAudio = null;
                     this.speakWithBrowserTTS(text);
                     resolve();
                 });
@@ -617,6 +1156,7 @@ class VoiceCopilot {
     }
 
     speakWithBrowserTTS(text) {
+        if (this.isMuted) return;  // Respect mute for browser TTS too
         if ('speechSynthesis' in window) {
             const utterance = new SpeechSynthesisUtterance(text);
             utterance.rate = 1.1;
@@ -636,11 +1176,41 @@ class VoiceCopilot {
         label.textContent = type === 'user' ? 'You' : 'Copilot';
         
         const content = document.createElement('div');
+        content.className = 'message-content';
         content.textContent = text || '(empty response)';
         
         messageDiv.appendChild(label);
         messageDiv.appendChild(content);
         this.conversation.appendChild(messageDiv);
+        
+        // Add long-press to copy functionality
+        let pressTimer = null;
+        const startPress = () => {
+            pressTimer = setTimeout(() => {
+                navigator.clipboard.writeText(text).then(() => {
+                    messageDiv.classList.add('copied');
+                    this.transcript.textContent = '📋 Copied to clipboard!';
+                    setTimeout(() => {
+                        messageDiv.classList.remove('copied');
+                    }, 1000);
+                }).catch(err => {
+                    console.error('Failed to copy:', err);
+                });
+            }, 500);  // 500ms long press
+        };
+        const cancelPress = () => {
+            if (pressTimer) {
+                clearTimeout(pressTimer);
+                pressTimer = null;
+            }
+        };
+        
+        messageDiv.addEventListener('mousedown', startPress);
+        messageDiv.addEventListener('mouseup', cancelPress);
+        messageDiv.addEventListener('mouseleave', cancelPress);
+        messageDiv.addEventListener('touchstart', startPress);
+        messageDiv.addEventListener('touchend', cancelPress);
+        messageDiv.addEventListener('touchcancel', cancelPress);
         
         // Scroll to bottom
         this.conversation.scrollTop = this.conversation.scrollHeight;
