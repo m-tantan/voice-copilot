@@ -135,39 +135,78 @@ def speak():
         return jsonify({"error": str(e), "use_browser_tts": True}), 500
 
 
-# Persistent event loop for async operations
-_event_loop = None
+import threading
 
-def get_event_loop():
-    """Get or create a persistent event loop for Copilot SDK"""
-    global _event_loop
-    if _event_loop is None or _event_loop.is_closed():
-        _event_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(_event_loop)
-    return _event_loop
+# Single persistent event loop running in background thread
+_loop = None
+_loop_thread = None
+
+def get_or_create_loop():
+    """Get the persistent event loop, creating it if needed"""
+    global _loop, _loop_thread
+    
+    if _loop is None or _loop.is_closed():
+        _loop = asyncio.new_event_loop()
+        
+        def run_loop():
+            asyncio.set_event_loop(_loop)
+            _loop.run_forever()
+        
+        _loop_thread = threading.Thread(target=run_loop, daemon=True)
+        _loop_thread.start()
+    
+    return _loop
+
+
+def run_async(coro):
+    """Run an async coroutine on the persistent loop"""
+    loop = get_or_create_loop()
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result(timeout=120)  # 2 minute timeout
 
 
 @app.route("/api/chat", methods=["POST"])
 def chat():
     """Send message to Copilot and get response"""
+    global _copilot_client, _copilot_session
+    
     data = request.get_json()
     if not data or "message" not in data:
         return jsonify({"error": "No message provided"}), 400
     
     message = data["message"]
+    print(f"[CHAT] Received message: {message[:50]}...")
     
     try:
-        # Use persistent event loop for Copilot SDK
-        loop = get_event_loop()
-        
         # Add context about file system access
         enhanced_message = message
         if any(word in message.lower() for word in ['file', 'folder', 'directory', 'drive', 'read', 'write', 'list', 'access']):
             enhanced_message = f"[Context: You have full access to the file system. Working directory is C:\\SOC. You can read, write, and list files.]\n\n{message}"
         
         async def process_message():
-            session = await get_copilot_session()
-            response = await session.send_and_wait({"prompt": enhanced_message})
+            global _copilot_client, _copilot_session
+            
+            # Create client if needed
+            if _copilot_client is None:
+                print("[CHAT] Creating new Copilot client...")
+                from copilot import CopilotClient
+                _copilot_client = CopilotClient()
+                await _copilot_client.start()
+                print("[CHAT] Client started")
+            
+            # Create session if needed
+            if _copilot_session is None:
+                print("[CHAT] Creating new session...")
+                _copilot_session = await _copilot_client.create_session({
+                    "model": "gpt-4",
+                    "streaming": False
+                })
+                print("[CHAT] Session created")
+            
+            print("[CHAT] Sending message to Copilot...")
+            response = await _copilot_session.send_and_wait({"prompt": enhanced_message})
+            print(f"[CHAT] Got response type: {type(response)}")
+            
             # Handle SessionEvent response type
             if hasattr(response, 'data') and hasattr(response.data, 'content'):
                 return response.data.content
@@ -180,22 +219,30 @@ def chat():
             else:
                 return str(response)
         
-        response_text = loop.run_until_complete(process_message())
-        # Don't close the loop - keep it for subsequent requests
+        response_text = run_async(process_message())
         
-        status = generate_voice_status(response_text)
+        print(f"[CHAT] Response: {response_text[:100]}...")
+        
+        voice_text = generate_voice_status(response_text)
+        print(f"[CHAT] Voice text: {voice_text[:100]}...")
         
         return jsonify({
             "response": response_text,
-            "voice_status": status
+            "voice_status": voice_text
         })
     except Exception as e:
-        # Fallback: echo back with acknowledgment (for demo/testing)
-        print(f"Copilot SDK error: {e}")
-        fallback_response = f"I received your message: '{message}'. The Copilot SDK connection is not configured. Please ensure you have valid credentials set up."
+        import traceback
+        print(f"[CHAT] ERROR: {type(e).__name__}: {e}")
+        traceback.print_exc()
+        
+        # Reset client/session on error so next request starts fresh
+        _copilot_client = None
+        _copilot_session = None
+        
+        fallback_response = f"I received your message: '{message[:50]}...'. The Copilot SDK encountered an error: {type(e).__name__}"
         return jsonify({
             "response": fallback_response,
-            "voice_status": "Message received. Copilot SDK not configured."
+            "voice_status": f"Error occurred: {type(e).__name__}. Please try again."
         })
 
 

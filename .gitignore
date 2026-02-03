@@ -5,3 +5,7 @@ __pycache__/
 .pytest_cache/
 *.wav
 .env
+
+# Large model files - download separately
+models/*.onnx
+models/*.onnx.json

@@ -166,16 +166,22 @@ class VoiceCopilot {
         };
 
         this.recognition.onend = () => {
-            // Restart if not recording (keep listening for wake words)
-            // But don't restart if we've been denied permission
-            if (!this.isRecording && this.wakeWordActive && !this.wakeWordStatus.classList.contains('inactive')) {
+            // Restart recognition in these cases:
+            // 1. Not recording - keep listening for wake words
+            // 2. Recording triggered by voice - need to listen for "stop" command
+            const shouldRestart = this.wakeWordActive && 
+                                  !this.wakeWordStatus.classList.contains('inactive') &&
+                                  (!this.isRecording || this.triggeredByVoice);
+            
+            if (shouldRestart) {
                 setTimeout(() => {
                     try {
                         this.recognition.start();
+                        console.log('Speech recognition restarted, isRecording:', this.isRecording);
                     } catch (e) {
                         console.warn('Could not restart recognition:', e);
                     }
-                }, 500);  // Increase delay to reduce spam
+                }, 100);  // Quick restart for responsive stop detection
             }
         };
 
@@ -211,6 +217,7 @@ class VoiceCopilot {
         if (this.isRecording) return;
 
         this.triggeredByVoice = triggeredByWakeWord;
+        this.recordingStartTime = Date.now();  // Track start time
 
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ 
@@ -276,6 +283,16 @@ class VoiceCopilot {
     }
 
     async processRecording() {
+        // Check recording duration - ignore if under 1 second
+        const recordingDuration = Date.now() - this.recordingStartTime;
+        if (recordingDuration < 1000) {
+            console.log('Recording too short, ignoring:', recordingDuration, 'ms');
+            this.transcript.textContent = 'Recording too short';
+            this.updateUI('ready');
+            this.startWakeWordDetection();
+            return;
+        }
+
         if (this.audioChunks.length === 0) {
             this.updateUI('ready');
             this.startWakeWordDetection();
@@ -413,21 +430,28 @@ class VoiceCopilot {
     }
 
     async sendToCopilot(message) {
+        console.log('[SEND] Sending to Copilot:', message);
         const response = await fetch('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ message })
         });
 
+        console.log('[SEND] Response status:', response.status);
+        
         if (!response.ok) {
             const error = await response.json();
+            console.error('[SEND] Error response:', error);
             throw new Error(error.error || 'Copilot request failed');
         }
 
-        return response.json();
+        const data = await response.json();
+        console.log('[SEND] Response data:', data);
+        return data;
     }
 
     async speak(text) {
+        console.log('[SPEAK] Speaking text:', text);
         try {
             const response = await fetch('/api/speak', {
                 method: 'POST',
@@ -482,6 +506,7 @@ class VoiceCopilot {
     }
 
     addMessage(type, text) {
+        console.log('[MESSAGE] Adding message:', type, text?.substring(0, 50));
         this.conversation.classList.add('active');
         
         const messageDiv = document.createElement('div');
@@ -492,7 +517,7 @@ class VoiceCopilot {
         label.textContent = type === 'user' ? 'You' : 'Copilot';
         
         const content = document.createElement('div');
-        content.textContent = text;
+        content.textContent = text || '(empty response)';
         
         messageDiv.appendChild(label);
         messageDiv.appendChild(content);
@@ -500,6 +525,7 @@ class VoiceCopilot {
         
         // Scroll to bottom
         this.conversation.scrollTop = this.conversation.scrollHeight;
+        console.log('[MESSAGE] Message added, conversation children:', this.conversation.children.length);
     }
 
     updateUI(state) {
