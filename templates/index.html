@@ -63,6 +63,32 @@
             <div id="auto-submit-timer" class="auto-submit-timer"></div>
         </main>
 
+        <!-- First Run Experience Modal -->
+        <div id="first-run-modal" class="modal-overlay" style="display: none;">
+            <div class="modal-content">
+                <h2>👋 Welcome to Voice Copilot!</h2>
+                <div class="tip-cards">
+                    <div class="tip-card">
+                        <div class="tip-icon">🎤</div>
+                        <h3>Start Recording</h3>
+                        <p><strong>Click the mic button</strong> to start/stop recording, or say <strong>"GitHub"</strong> or <strong>"Copilot"</strong> to activate hands-free.</p>
+                        <p class="tip-hint">Toggle <strong>PTT</strong> for hold-to-record mode.</p>
+                    </div>
+                    <div class="tip-card">
+                        <div class="tip-icon">🛑</div>
+                        <h3>Stop Recording</h3>
+                        <p>Click the button again, or say <strong>"stop listening"</strong> to end your recording.</p>
+                    </div>
+                    <div class="tip-card">
+                        <div class="tip-icon">⏱️</div>
+                        <h3>Auto-Send & Abort</h3>
+                        <p>After recording, you have <strong>4 seconds</strong> to review. Say <strong>"abort"</strong> or <strong>"cancel"</strong> to keep editing instead of auto-sending.</p>
+                    </div>
+                </div>
+                <button id="first-run-dismiss" class="dismiss-btn">Got it!</button>
+            </div>
+        </div>
+
         <footer>
             <div class="health-status" id="health-status">
                 <span class="health-indicator" id="health-indicator"></span>

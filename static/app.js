@@ -41,6 +41,9 @@ class VoiceCopilot {
     }
 
     init() {
+        // Check for first run experience
+        this.checkFirstRun();
+        
         // Start health monitoring
         this.startHealthMonitor();
         
@@ -134,6 +137,32 @@ class VoiceCopilot {
 
         // Check browser support
         this.checkSupport();
+    }
+
+    checkFirstRun() {
+        const hasSeenIntro = localStorage.getItem('voiceCopilot_hasSeenIntro');
+        
+        if (!hasSeenIntro) {
+            const modal = document.getElementById('first-run-modal');
+            const dismissBtn = document.getElementById('first-run-dismiss');
+            
+            if (modal && dismissBtn) {
+                modal.style.display = 'flex';
+                
+                dismissBtn.addEventListener('click', () => {
+                    modal.style.display = 'none';
+                    localStorage.setItem('voiceCopilot_hasSeenIntro', 'true');
+                });
+                
+                // Also dismiss on clicking overlay background
+                modal.addEventListener('click', (e) => {
+                    if (e.target === modal) {
+                        modal.style.display = 'none';
+                        localStorage.setItem('voiceCopilot_hasSeenIntro', 'true');
+                    }
+                });
+            }
+        }
     }
 
     checkSupport() {
@@ -605,14 +634,8 @@ class VoiceCopilot {
         switch (state) {
             case 'recording':
                 this.recordBtn.classList.add('recording');
-                // Show different text depending on how recording was triggered and mode
-                if (this.triggeredByVoice) {
-                    this.recordBtn.querySelector('.btn-text').textContent = 'Click or say "stop"';
-                } else if (this.pushToTalkMode) {
-                    this.recordBtn.querySelector('.btn-text').textContent = 'Release to stop';
-                } else {
-                    this.recordBtn.querySelector('.btn-text').textContent = 'Click to Stop';
-                }
+                // Show "Stop Listening" for all recording modes
+                this.recordBtn.querySelector('.btn-text').textContent = 'Stop Listening';
                 this.status.classList.add('recording');
                 this.status.textContent = '🔴 Recording';
                 break;
