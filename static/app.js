@@ -186,14 +186,15 @@ class VoiceCopilot {
 
     updateSessionId(sessionId) {
         // Update session ID display with Copilot session GUID
-        if (this.sessionIdValue) {
+        const sessionIdContainer = document.getElementById('session-id');
+        if (sessionIdContainer && this.sessionIdValue) {
             if (sessionId) {
-                // Show truncated GUID for readability
-                const shortId = sessionId.substring(0, 8);
-                this.sessionIdValue.textContent = shortId;
-                this.sessionIdValue.title = sessionId;  // Full ID on hover
+                // Show full GUID and make container visible
+                this.sessionIdValue.textContent = sessionId;
+                sessionIdContainer.style.display = 'block';
             } else {
-                this.sessionIdValue.textContent = '--';
+                // Hide until session exists
+                sessionIdContainer.style.display = 'none';
             }
         }
     }
