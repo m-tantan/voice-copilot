@@ -47,7 +47,7 @@ class VoiceCopilot {
 
         // Wake words
         this.wakeWords = ['copilot', 'github', 'hey copilot', 'hey github'];
-        this.stopWords = ['stop listening', 'done', 'finish', 'end', 'that\'s all'];
+        this.stopWords = ['stop listening'];
         this.abortWords = ['abort', 'cancel', 'nevermind', 'never mind'];
         this.extendWords = ['extend', 'continue', 'add more', 'keep going'];
         this.triggeredByVoice = false;
