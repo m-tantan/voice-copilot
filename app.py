@@ -158,11 +158,16 @@ def get_or_create_loop():
     return _loop
 
 
-def run_async(coro):
-    """Run an async coroutine on the persistent loop"""
+def run_async(coro, timeout=300):
+    """Run an async coroutine on the persistent loop
+    
+    Args:
+        coro: The coroutine to run
+        timeout: Timeout in seconds (default 300 = 5 minutes)
+    """
     loop = get_or_create_loop()
     future = asyncio.run_coroutine_threadsafe(coro, loop)
-    return future.result(timeout=120)  # 2 minute timeout
+    return future.result(timeout=timeout)  # 5 minute default timeout
 
 
 @app.route("/api/chat", methods=["POST"])
@@ -175,7 +180,8 @@ def chat():
         return jsonify({"error": "No message provided"}), 400
     
     message = data["message"]
-    print(f"[CHAT] Received message: {message[:50]}...")
+    timeout = data.get("timeout", 300)  # Default 5 minutes, can be extended
+    print(f"[CHAT] Received message: {message[:50]}... (timeout: {timeout}s)")
     
     try:
         # Add context about file system access
@@ -219,7 +225,7 @@ def chat():
             else:
                 return str(response)
         
-        response_text = run_async(process_message())
+        response_text = run_async(process_message(), timeout=timeout)
         
         print(f"[CHAT] Response: {response_text[:100]}...")
         
@@ -230,6 +236,13 @@ def chat():
             "response": response_text,
             "voice_status": voice_text
         })
+    except TimeoutError:
+        print(f"[CHAT] TIMEOUT after {timeout}s")
+        return jsonify({
+            "error": "timeout",
+            "message": f"Request timed out after {timeout // 60} minutes. Would you like to keep waiting?",
+            "can_extend": True
+        }), 408
     except Exception as e:
         import traceback
         print(f"[CHAT] ERROR: {type(e).__name__}: {e}")

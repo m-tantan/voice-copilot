@@ -34,8 +34,10 @@ class VoiceCopilot {
         this.wakeWords = ['copilot', 'github', 'hey copilot', 'hey github'];
         this.stopWords = ['stop listening', 'done', 'finish', 'end', 'that\'s all'];
         this.abortWords = ['abort', 'cancel', 'nevermind', 'never mind'];
+        this.extendWords = ['extend', 'continue', 'add more', 'keep going'];
         this.triggeredByVoice = false;
         this.autoSubmitActive = false;
+        this.pendingExtendText = '';  // Text to prepend when extending
 
         this.init();
     }
@@ -226,6 +228,18 @@ class VoiceCopilot {
                         return;
                     }
                 }
+                
+                // Check for extend words during auto-submit countdown
+                for (const extend of this.extendWords) {
+                    if (text.includes(extend)) {
+                        console.log('Extend word detected:', extend);
+                        this.cancelAutoSubmit();
+                        this.pendingExtendText = this.chatInput.value;  // Save current text
+                        this.transcript.textContent = `Extending: "${extend}" - record more to append`;
+                        this.startRecording(true);  // Start recording again
+                        return;
+                    }
+                }
             }
         };
 
@@ -390,11 +404,17 @@ class VoiceCopilot {
                 return;
             }
 
-            // Put transcription in chat input
-            this.chatInput.value = transcription.text;
+            // Put transcription in chat input (append if extending)
+            if (this.pendingExtendText) {
+                this.chatInput.value = this.pendingExtendText + ' ' + transcription.text;
+                this.pendingExtendText = '';  // Clear pending text
+                this.transcript.textContent = 'Extended transcription ready';
+            } else {
+                this.chatInput.value = transcription.text;
+                this.transcript.textContent = 'Voice transcription ready';
+            }
             this.chatInput.classList.add('voice-input');
             this.isVoiceInput = true;
-            this.transcript.textContent = 'Voice transcription ready';
             this.updateUI('ready');
 
             // Start auto-submit countdown (2 seconds)
@@ -414,12 +434,12 @@ class VoiceCopilot {
         let countdown = 4;
         this.autoSubmitActive = true;
         
-        this.autoSubmitTimer.textContent = `Auto-sending in ${countdown}s... (say "abort" to cancel)`;
+        this.autoSubmitTimer.textContent = `Auto-sending in ${countdown}s... (say "abort" or "extend")`;
         
         const tick = () => {
             countdown--;
             if (countdown > 0) {
-                this.autoSubmitTimer.textContent = `Auto-sending in ${countdown}s... (say "abort" to cancel)`;
+                this.autoSubmitTimer.textContent = `Auto-sending in ${countdown}s... (say "abort" or "extend")`;
                 this.autoSubmitTimeout = setTimeout(tick, 1000);
             } else {
                 this.autoSubmitTimer.textContent = '';
@@ -443,7 +463,7 @@ class VoiceCopilot {
     cleanStopWords(text) {
         // Remove stop words from the end of the message (case-insensitive)
         let cleaned = text;
-        const allStopWords = [...this.stopWords, ...this.abortWords];
+        const allStopWords = [...this.stopWords, ...this.abortWords, ...this.extendWords];
         
         for (const word of allStopWords) {
             // Remove from end of string (with optional trailing punctuation)
