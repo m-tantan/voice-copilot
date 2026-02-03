@@ -1272,7 +1272,7 @@ class VoiceCopilot {
     startHealthMonitor() {
         // Check immediately, then every 3 seconds
         this.checkHealth();
-        setInterval(() => this.checkHealth(), 3000);
+        setInterval(() => this.checkHealth(), 5000);
     }
 
     async checkHealth() {
