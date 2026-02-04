@@ -220,8 +220,8 @@ def chat():
                         "streaming": False
                     })
                     # Log session properties for debugging
-                    print(f"[CHAT] Session created, type: {type(_copilot_session)}")
-                    print(f"[CHAT] Session attrs: {dir(_copilot_session)}")
+                    session_id = _copilot_session.session_id if hasattr(_copilot_session, 'session_id') else 'unknown'
+                    print(f"[CHAT] *** NEW SESSION CREATED: {session_id} ***")
                 
                 print("[CHAT] Sending message to Copilot...")
                 response = await _copilot_session.send_and_wait({"prompt": enhanced_message})
@@ -240,8 +240,14 @@ def chat():
                     return str(response)
             except Exception as e:
                 error_msg = str(e).lower()
-                # Check for session/auth errors that warrant a retry
-                if retry_on_session_error and any(x in error_msg for x in ['session', 'model', 'auth', 'aggregate']):
+                error_type = type(e).__name__
+                print(f"[CHAT] Exception caught: {error_type}: {e}")
+                
+                # Only reset on specific connection/session errors, not general errors
+                session_error_keywords = ['session expired', 'session not found', 'unauthorized', 'authentication', 'connection refused']
+                is_session_error = any(keyword in error_msg for keyword in session_error_keywords)
+                
+                if retry_on_session_error and is_session_error:
                     print(f"[CHAT] Session error detected, resetting and retrying: {e}")
                     _copilot_client = None
                     _copilot_session = None
@@ -277,14 +283,19 @@ def chat():
         print(f"[CHAT] ERROR: {type(e).__name__}: {e}")
         traceback.print_exc()
         
-        # Reset client/session on error so next request starts fresh
-        _copilot_client = None
-        _copilot_session = None
+        # Only reset on specific fatal errors, not general ones
+        error_msg = str(e).lower()
+        fatal_errors = ['connection refused', 'client not started', 'authentication failed']
+        if any(err in error_msg for err in fatal_errors):
+            print("[CHAT] Fatal error - resetting client/session")
+            _copilot_client = None
+            _copilot_session = None
         
         fallback_response = f"I received your message: '{message[:50]}...'. The Copilot SDK encountered an error: {type(e).__name__}"
         return jsonify({
             "response": fallback_response,
-            "voice_status": f"Error occurred: {type(e).__name__}. Please try again."
+            "voice_status": f"Error occurred: {type(e).__name__}. Please try again.",
+            "session_id": _copilot_session.session_id if _copilot_session and hasattr(_copilot_session, 'session_id') else None
         })
 
 
@@ -355,8 +366,15 @@ def health():
 @app.route("/api/session/reset", methods=["POST"])
 def reset_session():
     """Reset the Copilot session for a fresh conversation"""
-    global _copilot_session
+    global _copilot_session, _context_stats
     _copilot_session = None
+    _context_stats = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "turns": 0,
+        "start_time": None,
+        "max_tokens": 128000
+    }
     print("[SESSION] Session reset by user")
     return jsonify({
         "success": True,
