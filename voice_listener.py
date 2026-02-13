@@ -149,13 +149,14 @@ def detect_wake_word(audio: np.ndarray) -> bool:
 def record_utterance() -> str:
     """Continuous streaming: records in background, transcribes latest chunk each cycle.
     
-    Only transcribes the newest ~2s of audio (caps buffer to prevent snowballing).
-    Appends each chunk's text to build the full prompt.
+    Uses overlapping chunks (0.5s overlap) to avoid losing words at boundaries.
+    Only transcribes the newest audio (capped) to keep latency constant.
     """
     print("[COCO] 🎙️  Streaming... (say \"fire\" to submit)")
     
     rate = NATIVE_RATE or 44100
     max_chunk_samples = int(CHUNK_DURATION * rate * 1.5)  # cap at 3s to prevent snowball
+    overlap_samples = int(0.5 * rate)  # 0.5s overlap between chunks
     chunk_lock = threading.Lock()
     current_chunk = []      # Accumulates audio blocks for current chunk
     
@@ -173,6 +174,7 @@ def record_utterance() -> str:
     typed_len = 0           # How many chars we've typed into terminal
     start_time = time.time()
     chunk_num = 0
+    prev_tail = None        # Last 0.5s of previous chunk for overlap
     
     try:
         while True:
@@ -187,19 +189,27 @@ def record_utterance() -> str:
                 chunk_audio = np.concatenate(current_chunk)
                 current_chunk.clear()
             
-            # Cap chunk size to prevent snowball: if transcription was slow
-            # and audio accumulated, only keep the latest ~3s
+            # Cap chunk size to prevent snowball
             if len(chunk_audio) > max_chunk_samples:
                 dropped_s = (len(chunk_audio) - max_chunk_samples) / rate
                 chunk_audio = chunk_audio[-max_chunk_samples:]
                 print(f"[COCO] ✂️  Trimmed chunk (dropped {dropped_s:.1f}s overflow)")
             
+            # Prepend overlap from previous chunk to catch boundary words
+            if prev_tail is not None:
+                chunk_with_overlap = np.concatenate([prev_tail, chunk_audio])
+            else:
+                chunk_with_overlap = chunk_audio
+            
+            # Save tail for next overlap
+            prev_tail = chunk_audio[-overlap_samples:] if len(chunk_audio) > overlap_samples else chunk_audio.copy()
+            
             level = rms(chunk_audio)
             if level < SILENCE_THRESHOLD:
                 continue
             
-            # Transcribe ONLY this chunk (constant time, ~1-2s)
-            text = transcribe(chunk_audio, beam_size=3)
+            # Transcribe with overlap (beam_size=1 for speed during live streaming)
+            text = transcribe(chunk_with_overlap, beam_size=1)
             
             if not text:
                 continue
