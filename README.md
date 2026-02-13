@@ -1,116 +1,108 @@
-# 🎙️ Voice Copilot
+# 🔥 Coco — Offline Voice Assistant for Copilot CLI
 
-A Python-based web application for multi-turn voice interactions with the GitHub Copilot SDK. **Built 100% hands-free using voice commands while driving.**
+```
+        ██████╗  ██████╗  ██████╗  ██████╗
+       ██╔════╝ ██╔═══██╗██╔════╝ ██╔═══██╗
+       ██║      ██║   ██║██║      ██║   ██║
+       ██║      ██║   ██║██║      ██║   ██║
+       ╚██████╗ ╚██████╔╝╚██████╗ ╚██████╔╝
+        ╚═════╝  ╚═════╝  ╚═════╝  ╚═════╝
+```
 
-## Features
+Talk to GitHub Copilot CLI — completely hands-free and 100% offline. No browser, no cloud STT, no internet required for voice processing.
 
-- **Voice Recording**: Hold button to record, or use wake words ("GitHub")
-- **Wake Word Detection**: Say "GitHub" to start recording hands-free
-- **Stop Commands**: Say "stop", "done", "finish" to end recording, or click the button
-- **Local STT**: Speech-to-text using faster-whisper (Whisper base model)
-- **Local TTS**: Text-to-speech using pyttsx3 (Windows SAPI)
-- **Multi-turn Conversations**: Persistent sessions with Copilot SDK
-- **File System Access**: Copilot can read/write files in your project
-- **Health Monitoring**: Visual indicator shows server and mic status
-- **Privacy-first**: All voice processing done locally
+## How It Works
+
+1. **Say "Coco"** — wake word activates the listener
+2. **Speak your prompt** — words appear live in the terminal as you talk
+3. **Say "fire"** — dispatches your prompt to Copilot CLI
+
+Coco runs as a background process alongside the Copilot CLI. It listens through your mic, transcribes speech locally with [faster-whisper](https://github.com/SYSTRAN/faster-whisper), and types the result directly into the focused terminal window. Copilot responds, and `speak.py` reads the answer back to you.
 
 ## Quick Start
 
-### 1. Clone the repository
+### 1. Clone and set up
 ```bash
 git clone https://github.com/m-tantan/voice-copilot.git
 cd voice-copilot
-```
 
-### 2. Create and activate virtual environment
-```bash
 # Windows
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 
-# Linux/Mac
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-### 3. Install dependencies
-```bash
 pip install -r requirements.txt
 ```
 
-### 4. Download the Whisper model (first run only)
-The model (~150MB) downloads automatically on first use.
-
-### 5. Start the server
+### 2. Start Coco
 ```bash
-python app.py
+python voice_listener.py
 ```
 
-### 6. Open in browser
-Navigate to **http://localhost:5000**
+The Whisper model (~500MB for `small`) downloads automatically on first run.
 
-## Usage
+### 3. Open a second terminal and start Copilot CLI
+```bash
+gh copilot
+```
 
-1. **Wake Word**: Say **"GitHub"** to start recording hands-free
-2. **Button Recording**: Hold the microphone button to record, release to stop
-3. **Stop Recording**: Say "stop", "done", or "finish" - or click the button
-4. **Text Input**: Type directly in the chat box and press Enter
-5. **Auto-send**: After voice transcription, you have 2 seconds to edit before auto-send
+Focus the Copilot CLI terminal, say **"Coco"**, speak your prompt, and say **"fire"** to submit.
 
-## Health Indicator
+## Features
 
-The footer shows connection status:
-- 🟢 **Green**: Server online, mic working - "Ready • Say GitHub to start"
-- 🟡 **Yellow**: Server online, mic permission needed
-- 🔴 **Red**: Server offline - run `python app.py`
-
-## API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/` | GET | Main web interface |
-| `/api/transcribe` | POST | Transcribe audio to text |
-| `/api/speak` | POST | Convert text to speech |
-| `/api/chat` | POST | Send message to Copilot |
-| `/api/health` | GET | Health check |
-
-## Tech Stack
-
-- **Backend**: Flask + Python 3.9+
-- **STT**: faster-whisper (Whisper base model)
-- **TTS**: pyttsx3 (Windows SAPI voices)
-- **AI**: github-copilot-sdk
-- **Frontend**: Vanilla JS with Web Audio API & Web Speech API
+| Feature | Details |
+|---------|---------|
+| **Wake word** | "Coco" — distinctive repeated hard K sound for reliable detection |
+| **Dispatch word** | "fire" — submits the transcribed prompt |
+| **Live transcription** | Words appear in the terminal input as you speak (every ~2s) |
+| **Offline STT** | faster-whisper with `small` model — no internet needed |
+| **Offline TTS** | `speak.py` uses pyttsx3 / Windows SAPI (Zira voice) |
+| **Auto sample rate** | Detects your mic's native rate and resamples to 16kHz for Whisper |
+| **Audio feedback** | Two-tone beep (800Hz → 1200Hz) confirms wake word detection |
 
 ## Project Structure
 
 ```
 voice-copilot/
-├── app.py              # Flask backend
+├── voice_listener.py   # Coco: wake word + live transcription + dispatch
+├── speak.py            # TTS output (pyttsx3, --clean strips markdown)
+├── AGENTS.md           # Copilot agent instructions (voice mode config)
 ├── requirements.txt    # Python dependencies
-├── test_app.py         # Playwright tests
-├── LICENSE             # MIT License
-├── models/             # Voice models (downloaded on first run)
-├── static/
-│   ├── app.js          # Frontend JavaScript
-│   └── style.css       # Styles
-└── templates/
-    └── index.html      # Main page
+├── app.py              # Flask backend (optional web UI mode)
+├── static/             # Web UI assets (optional)
+├── templates/          # Web UI templates (optional)
+├── models/             # Whisper models (auto-downloaded)
+└── LICENSE             # MIT
 ```
 
-## Running Tests
+### Core Files
 
-```bash
-pip install pytest pytest-playwright
-playwright install chromium
-pytest test_app.py -v  # Server must be running
+- **`voice_listener.py`** — The main Coco process. Continuously listens via `sounddevice`, detects the wake word, streams live transcription chunks, and types into the terminal with `keyboard.write()`.
+- **`speak.py`** — Called by Copilot CLI to speak responses aloud. Strips markdown, code blocks, and file paths for natural speech. Usage: `python speak.py --clean "Your message here"`
+
+### Optional Web UI
+
+The Flask app (`app.py`) and frontend (`static/`, `templates/`) provide a browser-based voice interface as an alternative to the CLI workflow. Start with `python app.py` and open `http://localhost:5000`.
+
+## Configuration
+
+Edit the constants at the top of `voice_listener.py`:
+
+```python
+WAKE_WORD = "coco"           # What activates the listener
+DISPATCH_WORDS = ["fire"]    # What submits the prompt
+CHUNK_DURATION = 2.0         # Seconds between transcription updates
+SILENCE_THRESHOLD = 300      # RMS below this = silence
+SILENCE_TIMEOUT = 20         # Seconds of silence before auto-stop
 ```
 
-## Browser Support
+## Requirements
 
-- **Chrome/Edge**: Full support (recommended)
-- **Firefox**: Recording works, wake word detection limited
-- **Safari**: May require permissions prompt
+- **Python 3.9+** on Windows
+- **Microphone** (any; native sample rate auto-detected)
+- **faster-whisper** for offline speech-to-text
+- **pyttsx3** for offline text-to-speech
+- **sounddevice** + **numpy** for audio capture
+- **keyboard** for typing into the terminal
 
 ## License
 

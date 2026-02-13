@@ -5,7 +5,23 @@ __pycache__/
 .pytest_cache/
 *.wav
 .env
+node_modules/
+package-lock.json
+package.json
 
 # Large model files - download separately
 models/*.onnx
 models/*.onnx.json
+
+# Test HTML files (not part of Coco)
+demo.html
+dragonfly.html
+flashy.html
+greeting.html
+hello-everyone.html
+hello-friend.html
+hello-tom.html
+hey-friends.html
+hi.html
+o-hod.html
+test-hello.html
