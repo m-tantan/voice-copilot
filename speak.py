@@ -3,10 +3,22 @@
 Usage: python speak.py "Text to speak"
        echo "Text to speak" | python speak.py
        python speak.py --clean "Markdown **text** with `code`"
+       python speak.py --voice kristin "Use Piper neural voice"
+       python speak.py --voice amy "Use Amy neural voice"
+       python speak.py --voice zira "Use Windows SAPI voice (fallback)"
 """
 import sys
 import re
-import pyttsx3
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+
+# Piper binary and models directory (relative to this script)
+SCRIPT_DIR = Path(__file__).parent
+PIPER_EXE = SCRIPT_DIR / "piper" / "piper" / "piper.exe"
+PIPER_MODELS_DIR = SCRIPT_DIR / "piper" / "models"
+DEFAULT_VOICE = "amy"  # Best neural voice
 
 
 def clean_for_speech(text: str) -> str:
@@ -37,31 +49,91 @@ def clean_for_speech(text: str) -> str:
     return cleaned.strip()
 
 
-def speak(text: str, clean: bool = False):
-    if not text or not text.strip():
-        return
-    if clean:
-        text = clean_for_speech(text)
+def speak_piper(text: str, voice: str = DEFAULT_VOICE):
+    """Speak using Piper neural TTS (much more natural than SAPI)."""
+    model_path = PIPER_MODELS_DIR / f"{voice}.onnx"
+    if not PIPER_EXE.exists() or not model_path.exists():
+        return False
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp_path = tmp.name
+
+    try:
+        result = subprocess.run(
+            [str(PIPER_EXE), "--model", str(model_path), "--output_file", tmp_path],
+            input=text.encode("utf-8"),
+            capture_output=True, timeout=30
+        )
+        if result.returncode != 0:
+            return False
+        # Play the WAV file synchronously
+        import winsound
+        winsound.PlaySound(tmp_path, winsound.SND_FILENAME)
+    except Exception as e:
+        print(f"[speak] Piper error: {e}", file=sys.stderr)
+        return False
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+    return True
+
+
+def speak_sapi(text: str):
+    """Speak using pyttsx3 / Windows SAPI (fallback)."""
+    import pyttsx3
     engine = pyttsx3.init()
-    # Use Zira (female voice) — clearer for spoken responses
     voices = engine.getProperty('voices')
     for v in voices:
         if 'zira' in v.name.lower():
             engine.setProperty('voice', v.id)
             break
-    engine.setProperty('rate', 170)  # Slightly slower for clarity
+    engine.setProperty('rate', 170)
     engine.setProperty('volume', 1.0)
     engine.say(text)
     engine.runAndWait()
     engine.stop()
 
 
+def speak(text: str, clean: bool = False, voice: str = DEFAULT_VOICE):
+    if not text or not text.strip():
+        return
+    if clean:
+        text = clean_for_speech(text)
+
+    # Try Piper neural voice first, fall back to SAPI
+    if voice != "zira" and speak_piper(text, voice):
+        return
+    speak_sapi(text)
+
+
 if __name__ == "__main__":
     clean = '--clean' in sys.argv
-    args = [a for a in sys.argv[1:] if a != '--clean']
+    # Parse --voice flag
+    voice = DEFAULT_VOICE
+    args = []
+    skip_next = False
+    for i, a in enumerate(sys.argv[1:], 1):
+        if skip_next:
+            skip_next = False
+            continue
+        if a == '--voice' and i < len(sys.argv) - 1:
+            voice = sys.argv[i + 1]
+            skip_next = True
+        elif a == '--clean':
+            continue
+        else:
+            args.append(a)
+
     if args:
-        speak(" ".join(args), clean=clean)
+        speak(" ".join(args), clean=clean, voice=voice)
     elif not sys.stdin.isatty():
-        speak(sys.stdin.read(), clean=clean)
+        speak(sys.stdin.read(), clean=clean, voice=voice)
     else:
-        print("Usage: python speak.py [--clean] 'text to speak'")
+        print("Usage: python speak.py [--clean] [--voice kristin|amy|zira] 'text'")
+        print(f"\nAvailable Piper voices in {PIPER_MODELS_DIR}:")
+        if PIPER_MODELS_DIR.exists():
+            for f in PIPER_MODELS_DIR.glob("*.onnx"):
+                print(f"  - {f.stem}")
+        print("  - zira (Windows SAPI fallback)")

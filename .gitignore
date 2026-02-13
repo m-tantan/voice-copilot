@@ -13,6 +13,9 @@ package.json
 models/*.onnx
 models/*.onnx.json
 
+# Piper binary and voice models (downloaded separately, ~130MB)
+piper/
+
 # Test HTML files (not part of Coco)
 demo.html
 dragonfly.html
