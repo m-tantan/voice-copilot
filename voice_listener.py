@@ -31,7 +31,7 @@ import keyboard
 
 # --- Config ---
 WAKE_WORD = "coco"
-DISPATCH_WORDS = ["fire", "send", "go", "enter", "submit", "done"]
+DISPATCH_WORDS = ["fire"]
 NATIVE_RATE = None           # Auto-detect from mic (set in main_loop)
 WHISPER_RATE = 16000         # Whisper expects 16kHz
 CHANNELS = 1
@@ -281,7 +281,7 @@ def main_loop():
     info = sd.query_devices(kind='input')
     NATIVE_RATE = int(info['default_samplerate'])
 
-    dispatch_display = " / ".join(f'"{w}"' for w in DISPATCH_WORDS[:3])
+    dispatch_display = " / ".join(f'"{w}"' for w in DISPATCH_WORDS)
 
     C = "\033[36m"    # cyan
     G = "\033[32m"    # green
