@@ -31,6 +31,16 @@ pytest test_app.py -v
 - Models lazy-load on first request
 - TTS falls back to browser speech if pyttsx3 fails
 
+## Voice Mode (Copilot CLI)
+When the user says "voice mode on" or "enable voice mode", activate voice mode for the session:
+- After EVERY response, run: `python C:\SOC\mobile\speak.py --clean "your spoken summary here"`
+- The summary should be a CONVERSATIONAL version of your response — as if you're explaining it to someone who can't see the screen
+- Include WHAT you did, WHAT the result was, and any next steps
+- Don't mention file paths, code syntax, or markdown — the --clean flag strips those anyway
+- Keep it under 3 sentences for simple answers, up to 5 for complex ones
+- When the user says "voice mode off" or "disable voice mode", stop calling speak.py
+- The wake word for voice input is "Coco" — the background listener (`voice_listener.py`) handles this
+
 ## When Editing
 - Keep voice processing local (privacy-first)
 - Maintain multi-turn session state in `_copilot_session`

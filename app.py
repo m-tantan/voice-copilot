@@ -7,7 +7,9 @@ import asyncio
 import uuid
 from pathlib import Path
 
-from flask import Flask, request, jsonify, send_file, render_template
+from flask import Flask, request, jsonify, send_file, render_template, Response
+import json
+import queue
 from flask_cors import CORS
 from dotenv import load_dotenv
 
@@ -36,7 +38,8 @@ _context_stats = {
 
 # Lazy-loaded models
 _whisper_model = None
-_piper_voice = None
+_piper_onnx_model = None  # True Piper model
+_piper_voice = None  # pyttsx3 engine (confusingly named)
 _copilot_client = None
 _copilot_session = None
 
@@ -49,6 +52,16 @@ def get_whisper_model():
         _whisper_model = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
         print(f"Loaded Whisper model: {WHISPER_MODEL}")
     return _whisper_model
+
+
+def get_piper_model():
+    """Lazy load Piper ONNX model"""
+    global _piper_onnx_model
+    if _piper_onnx_model is None:
+        import piper
+        _piper_onnx_model = piper.PiperVoice.load(str(PIPER_MODEL_PATH), config_path=str(PIPER_CONFIG_PATH))
+        print(f"Loaded Piper ONNX model: {PIPER_MODEL_PATH}")
+    return _piper_onnx_model
 
 
 def get_tts_engine():
@@ -114,7 +127,43 @@ def transcribe():
             "stop_detected": stop_detected
         })
     finally:
-        os.unlink(tmp_path)
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
+@app.route("/api/wake-detect", methods=["POST"])
+def wake_detect():
+    """Fast transcription for wake word detection"""
+    if "audio" not in request.files:
+        return jsonify({"error": "No audio"}), 400
+    
+    audio = request.files["audio"]
+    
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        audio.save(tmp.name)
+        tmp_path = tmp.name
+        
+    try:
+        # Use beam_size=1 for speed, vad_filter to skip silence
+        model = get_whisper_model()
+        segments, _ = model.transcribe(tmp_path, beam_size=1, language="en", vad_filter=True)
+        text = " ".join([s.text for s in segments]).lower().strip()
+        
+        # Wake words and commands
+        detected = any(w in text for w in ["copilot", "github"])
+        
+        command = None
+        if "stop listening" in text: command = "stop_listening"
+        elif "abort" in text or "cancel" in text: command = "abort"
+        elif "extend" in text or "continue" in text: command = "extend"
+        
+        return jsonify({"detected": detected, "command": command, "text": text})
+    except Exception as e:
+        print(f"[WAKE] Error: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 
 @app.route("/api/speak", methods=["POST"])
@@ -126,7 +175,13 @@ def speak():
     
     text = data["text"]
     
+    # Handle empty or whitespace-only text
+    if not text or not text.strip():
+        print("[SPEAK] Empty text received, returning empty audio")
+        return jsonify({"error": "Empty text", "use_browser_tts": True}), 400
+    
     try:
+        # Try pyttsx3 first (offline, fast, but system dependent)
         import pyttsx3
         engine = pyttsx3.init()
         engine.setProperty('rate', 175)
@@ -145,7 +200,24 @@ def speak():
         
         return send_file(io.BytesIO(wav_data), mimetype="audio/wav")
     except Exception as e:
-        return jsonify({"error": str(e), "use_browser_tts": True}), 500
+        print(f"[SPEAK] pyttsx3 failed: {e}, trying Piper...")
+        try:
+            # Fallback to Piper ONNX
+            voice = get_piper_model()
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                tmp_path = tmp.name
+            
+            with wave.open(tmp_path, "wb") as wav_file:
+                voice.synthesize(text, wav_file)
+                
+            with open(tmp_path, 'rb') as f:
+                wav_data = f.read()
+            os.unlink(tmp_path)
+            
+            return send_file(io.BytesIO(wav_data), mimetype="audio/wav")
+        except Exception as e2:
+            print(f"[SPEAK] Piper also failed: {e2}")
+            return jsonify({"error": f"TTS failed: {e}, {e2}", "use_browser_tts": False}), 500
 
 
 import threading
@@ -297,6 +369,214 @@ def chat():
             "voice_status": f"Error occurred: {type(e).__name__}. Please try again.",
             "session_id": _copilot_session.session_id if _copilot_session and hasattr(_copilot_session, 'session_id') else None
         })
+
+
+@app.route("/api/chat/stream", methods=["POST"])
+def chat_stream():
+    """Send message to Copilot and stream response via SSE"""
+    global _copilot_client, _copilot_session
+    
+    data = request.get_json()
+    if not data or "message" not in data:
+        return jsonify({"error": "No message provided"}), 400
+    
+    message = data["message"]
+    print(f"[STREAM] Received message: {message[:50]}...")
+    
+    # Add context about file system access
+    enhanced_message = f"[IMPORTANT: The user's current working directory is {_current_working_dir}. When asked about working directory or location, report this path. All file operations should be relative to this directory.]\n\n{message}"
+    
+    # Queue for passing events from async handler to SSE generator
+    event_queue = queue.Queue()
+    
+    def generate_sse():
+        """Generator that yields SSE events from the queue"""
+        while True:
+            try:
+                event = event_queue.get(timeout=300)  # 5 min timeout
+                if event is None:  # Sentinel to stop
+                    break
+                yield f"data: {json.dumps(event)}\n\n"
+            except queue.Empty:
+                # Send keepalive
+                yield f"data: {json.dumps({'type': 'keepalive'})}\n\n"
+    
+    async def process_streaming():
+        global _copilot_client, _copilot_session
+        
+        try:
+            # Create client if needed
+            if _copilot_client is None:
+                print("[STREAM] Creating new Copilot client...")
+                from copilot import CopilotClient
+                _copilot_client = CopilotClient()
+                await _copilot_client.start()
+                print("[STREAM] Client started")
+            
+            # Create session if needed
+            if _copilot_session is None:
+                print("[STREAM] Creating new session...")
+                _copilot_session = await _copilot_client.create_session({
+                    "model": "gpt-4"
+                })
+                session_id = _copilot_session.session_id if hasattr(_copilot_session, 'session_id') else 'unknown'
+                print(f"[STREAM] *** NEW SESSION CREATED: {session_id} ***")
+            
+            session_id = _copilot_session.session_id if hasattr(_copilot_session, 'session_id') else None
+            event_queue.put({"type": "session", "session_id": session_id})
+            
+            # Collected response for final message
+            collected_content = []
+            turn_complete = asyncio.Event()
+            
+            def handle_event(event):
+                """Handle streaming events from Copilot SDK"""
+                try:
+                    # Get event type - handle both string and enum formats
+                    raw_type = event.type if hasattr(event, 'type') else str(type(event))
+                    # Convert enum to string value if needed (e.g., SessionEventType.ASSISTANT_MESSAGE -> assistant.message)
+                    event_type = raw_type.value if hasattr(raw_type, 'value') else str(raw_type)
+                    
+                    # Log event data for debugging
+                    event_data_str = str(event.data)[:200] if hasattr(event, 'data') else 'no data'
+                    print(f"[STREAM] Event: {event_type} | Data: {event_data_str}")
+                    
+                    if event_type == "assistant.message_delta":
+                        # Streaming text chunk
+                        content = event.data.content if hasattr(event.data, 'content') else ''
+                        if content:
+                            collected_content.append(content)
+                            event_queue.put({
+                                "type": "delta",
+                                "content": content
+                            })
+                    
+                    elif event_type == "assistant.intent":
+                        # AI is thinking about something
+                        intent = event.data.intent if hasattr(event.data, 'intent') else str(event.data)
+                        event_queue.put({
+                            "type": "intent",
+                            "intent": intent
+                        })
+                    
+                    elif event_type == "assistant.turn_start":
+                        event_queue.put({"type": "turn_start"})
+                    
+                    elif event_type == "assistant.turn_end":
+                        turn_complete.set()
+                        event_queue.put({"type": "turn_end"})
+                    
+                    elif event_type == "tool.execution_start":
+                        tool_name = event.data.name if hasattr(event.data, 'name') else 'tool'
+                        event_queue.put({
+                            "type": "tool_start",
+                            "tool": tool_name
+                        })
+                    
+                    elif event_type == "tool.execution_progress":
+                        progress = event.data.progress if hasattr(event.data, 'progress') else None
+                        event_queue.put({
+                            "type": "tool_progress",
+                            "progress": progress
+                        })
+                    
+                    elif event_type == "tool.execution_complete":
+                        tool_name = event.data.name if hasattr(event.data, 'name') else 'tool'
+                        event_queue.put({
+                            "type": "tool_complete",
+                            "tool": tool_name
+                        })
+                    
+                    elif event_type == "session.error":
+                        error_msg = event.data.message if hasattr(event.data, 'message') else str(event.data)
+                        event_queue.put({
+                            "type": "error",
+                            "message": error_msg
+                        })
+                        turn_complete.set()
+                    
+                    elif event_type == "assistant.message":
+                        # Final complete message (may come instead of deltas)
+                        content = event.data.content if hasattr(event.data, 'content') else ''
+                        if content:
+                            collected_content.append(content)
+                            event_queue.put({
+                                "type": "message",
+                                "content": content
+                            })
+                    
+                    elif event_type == "assistant.reasoning":
+                        # Reasoning/explanation text - also capture this
+                        content = event.data.content if hasattr(event.data, 'content') else ''
+                        if content and not collected_content:
+                            # Use reasoning as fallback if no message content
+                            collected_content.append(content)
+                            event_queue.put({
+                                "type": "message", 
+                                "content": content
+                            })
+                
+                except Exception as e:
+                    print(f"[STREAM] Error handling event: {e}")
+            
+            # Subscribe to events
+            unsubscribe = _copilot_session.on(handle_event)
+            
+            try:
+                # Send the message (non-blocking, events come via handler)
+                print("[STREAM] Sending message...")
+                await _copilot_session.send({"prompt": enhanced_message})
+                
+                # Wait for turn to complete (with timeout)
+                try:
+                    await asyncio.wait_for(turn_complete.wait(), timeout=300)
+                except asyncio.TimeoutError:
+                    event_queue.put({"type": "error", "message": "Response timed out"})
+                
+                # Send final complete message
+                full_response = ''.join(collected_content)
+                voice_text = generate_voice_status(full_response)
+                event_queue.put({
+                    "type": "complete",
+                    "content": full_response,
+                    "voice_status": voice_text,
+                    "session_id": session_id
+                })
+                
+            finally:
+                unsubscribe()
+        
+        except Exception as e:
+            print(f"[STREAM] Error: {e}")
+            import traceback
+            traceback.print_exc()
+            event_queue.put({
+                "type": "error",
+                "message": str(e)
+            })
+        
+        finally:
+            # Signal end of stream
+            event_queue.put(None)
+    
+    # Start async processing in background
+    def run_streaming():
+        loop = get_or_create_loop()
+        asyncio.run_coroutine_threadsafe(process_streaming(), loop)
+    
+    # Start the async task
+    threading.Thread(target=run_streaming, daemon=True).start()
+    
+    # Return SSE response
+    return Response(
+        generate_sse(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no'
+        }
+    )
 
 
 def generate_voice_status(response: str) -> str:
@@ -673,4 +953,6 @@ def select_cwd():
 if __name__ == "__main__":
     print("Starting Voice Copilot Server...")
     print(f"Models directory: {MODELS_DIR}")
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    # Allow disabling debug mode via environment variable (for subprocess spawning)
+    debug_mode = os.environ.get('FLASK_DEBUG', '1') == '1'
+    app.run(debug=debug_mode, host="0.0.0.0", port=5000)

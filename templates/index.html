@@ -39,12 +39,29 @@
         <main>
             <div class="demo-notice">
                 <span class="pulse-dot"></span>
-                Built 100% hands-free using GitHub Copilot
+                Use GitHub Copilot 100% hands-free
                 <div class="session-id" id="session-id" style="display: none;">Session: <span id="session-id-value"></span></div>
             </div>
 
             <div class="status-container">
                 <div id="status" class="status">Ready</div>
+                <div id="process-steps" class="process-steps" style="display: none;">
+                    <div class="process-step" data-step="transcribe">
+                        <span class="step-icon">🎤</span>
+                        <span class="step-label">Transcribing</span>
+                        <span class="step-status"></span>
+                    </div>
+                    <div class="process-step" data-step="thinking">
+                        <span class="step-icon">🧠</span>
+                        <span class="step-label">AI Thinking</span>
+                        <span class="step-status"></span>
+                    </div>
+                    <div class="process-step" data-step="speaking">
+                        <span class="step-icon">🔊</span>
+                        <span class="step-label">Speaking</span>
+                        <span class="step-status"></span>
+                    </div>
+                </div>
                 <div id="wake-word-status" class="wake-word-status">
                     <span class="indicator"></span>
                     Listening for wake word...
@@ -66,6 +83,19 @@
                     </svg>
                     <span class="ptt-label">PTT</span>
                 </button>
+            </div>
+
+            <!-- Copilot-style Activity Status Bar -->
+            <div id="activity-status" class="activity-status" style="display: none;">
+                <div class="activity-orb">
+                    <div class="orb-core"></div>
+                    <div class="orb-ring"></div>
+                    <div class="orb-ring orb-ring-2"></div>
+                </div>
+                <div class="activity-content">
+                    <span id="activity-verb" class="activity-verb">Thinking</span>
+                    <span id="activity-text" class="activity-text">processing your request</span>
+                </div>
             </div>
 
             <div class="conversation" id="conversation">
@@ -180,6 +210,7 @@
         </footer>
     </div>
 
+    <script src="/static/marked.min.js"></script>
     <script src="/static/app.js"></script>
 </body>
 </html>

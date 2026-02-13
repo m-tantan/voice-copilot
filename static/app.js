@@ -20,6 +20,7 @@ class VoiceCopilot {
         this.cwdBreadcrumbs = document.getElementById('cwd-breadcrumbs');
         this.muteBadge = document.getElementById('mute-badge');
         this.sessionIdValue = document.getElementById('session-id-value');
+        this.newSessionBtn = document.getElementById('new-session-btn');
         
         // Folder picker elements
         this.folderPickerModal = document.getElementById('folder-picker-modal');
@@ -30,6 +31,15 @@ class VoiceCopilot {
         this.folderPickerDrives = document.getElementById('folder-picker-drives');
         this.folderPickerSelect = document.getElementById('folder-picker-select');
         this.currentBrowsePath = null;
+        
+        // Process steps indicator
+        this.processSteps = document.getElementById('process-steps');
+        
+        // Activity status bar
+        this.activityStatus = document.getElementById('activity-status');
+        this.activityVerb = document.getElementById('activity-verb');
+        this.activityText = document.getElementById('activity-text');
+        this.activityInterval = null;
 
         // State
         this.isRecording = false;
@@ -44,6 +54,9 @@ class VoiceCopilot {
         this.pushToTalkMode = false;  // PTT toggle state
         this.isMuted = false;  // TTS mute state
         this.currentAudio = null;  // Current playing audio for stopping mid-speech
+        this.isSpeaking = false;  // Track if TTS is currently playing
+        this.useStreaming = true;  // Enable streaming by default
+        this.currentStreamingMessage = null;  // Reference to streaming message element
 
         // Wake words
         this.wakeWords = ['copilot', 'github', 'hey copilot', 'hey github'];
@@ -88,6 +101,11 @@ class VoiceCopilot {
         
         // Initialize folder picker buttons
         this.initFolderPicker();
+        
+        // New session button handler
+        if (this.newSessionBtn) {
+            this.newSessionBtn.addEventListener('click', () => window.location.reload());
+        }
         
         // Start health monitoring
         this.startHealthMonitor();
@@ -182,6 +200,34 @@ class VoiceCopilot {
 
         // Check browser support
         this.checkSupport();
+        
+        // Set up click-to-copy for session ID
+        this.setupSessionIdCopy();
+    }
+
+    setupSessionIdCopy() {
+        const sessionIdContainer = document.getElementById('session-id');
+        if (sessionIdContainer) {
+            sessionIdContainer.style.cursor = 'pointer';
+            sessionIdContainer.title = 'Click to copy session ID';
+            sessionIdContainer.addEventListener('click', () => {
+                const sessionId = this.sessionIdValue?.textContent;
+                if (sessionId) {
+                    navigator.clipboard.writeText(sessionId).then(() => {
+                        // Show feedback
+                        const originalText = sessionIdContainer.innerHTML;
+                        sessionIdContainer.innerHTML = '📋 Copied!';
+                        sessionIdContainer.classList.add('copied');
+                        setTimeout(() => {
+                            sessionIdContainer.innerHTML = originalText;
+                            sessionIdContainer.classList.remove('copied');
+                        }, 1500);
+                    }).catch(err => {
+                        console.error('Failed to copy session ID:', err);
+                    });
+                }
+            });
+        }
     }
 
     updateSessionId(sessionId) {
@@ -233,141 +279,171 @@ class VoiceCopilot {
     }
 
     initWakeWordDetection() {
-        // Use Web Speech API for wake word detection
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        // Use MediaRecorder for offline-compatible wake word detection
+        this.wakeWordActive = false;
+        this.wakeWordStream = null;
+        this.wakeWordRecorder = null;
+        this.wakeWordLoopTimer = null;
         
-        if (!SpeechRecognition) {
-            this.wakeWordStatus.innerHTML = '<span class="indicator" style="background: #cf222e;"></span> Wake word not supported';
-            this.wakeWordStatus.classList.add('inactive');
-            return;
-        }
+        // Start if permission granted (checked in checkSupport)
+        this.startWakeWordDetection();
+    }
 
-        this.recognition = new SpeechRecognition();
-        this.recognition.continuous = true;
-        this.recognition.interimResults = true;
-        this.recognition.lang = 'en-US';
-
-        this.recognition.onresult = (event) => {
-            const last = event.results[event.results.length - 1];
-            const text = last[0].transcript.toLowerCase().trim();
+    async startWakeWordDetection() {
+        if (this.wakeWordActive) return;
+        
+        try {
+            // Re-acquire stream if needed
+            if (!this.wakeWordStream || !this.wakeWordStream.active) {
+                this.wakeWordStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            }
             
-            // Check for mute/unmute commands (only when not recording)
-            if (!this.isRecording) {
-                const muteAction = this.detectMuteCommand(text);
-                if (muteAction) {
-                    console.log('Mute command detected:', muteAction);
-                    this.transcript.textContent = muteAction === 'mute' ? 'Muting voice...' : 'Unmuting voice...';
-                    this.handleMuteCommand(muteAction);
+            this.wakeWordActive = true;
+            this.wakeWordStatus.innerHTML = '<span class="indicator"></span> Listening for wake word...';
+            this.wakeWordStatus.classList.remove('inactive');
+            
+            this.runWakeWordLoop();
+        } catch (e) {
+            console.warn('Could not start wake word detection:', e);
+            this.wakeWordStatus.innerHTML = '<span class="indicator" style="background: #cf222e;"></span> Mic error';
+        }
+    }
+
+    runWakeWordLoop() {
+        if (!this.wakeWordActive || !this.wakeWordStream || !this.wakeWordStream.active) return;
+        
+        // Record for 1.5 seconds
+        try {
+            const recorder = new MediaRecorder(this.wakeWordStream);
+            const chunks = [];
+            
+            recorder.ondataavailable = e => {
+                if (e.data.size > 0) chunks.push(e.data);
+            };
+            
+            recorder.onstop = async () => {
+                // Process only if we are still active
+                if (!this.wakeWordActive) return;
+                
+                // Restart loop immediately to minimize gap
+                this.runWakeWordLoop();
+                
+                // Process audio
+                if (chunks.length > 0) {
+                    const blob = new Blob(chunks, { type: 'audio/webm' });
+                    this.processWakeWordAudio(blob);
+                }
+            };
+            
+            recorder.start();
+            // Stop after 1.5s
+            this.wakeWordLoopTimer = setTimeout(() => {
+                if (recorder.state === 'recording') recorder.stop();
+            }, 1500);
+            
+        } catch (e) {
+            console.error('Wake word loop error:', e);
+            this.wakeWordActive = false;
+        }
+    }
+
+    async processWakeWordAudio(blob) {
+        try {
+            const formData = new FormData();
+            formData.append('audio', blob, 'wake.webm');
+            
+            const response = await fetch('/api/wake-detect', {
+                method: 'POST',
+                body: formData
+            });
+            
+            if (!response.ok) return;
+            
+            const data = await response.json();
+            if (data.text) {
+                this.handleWakeWordText(data.text);
+            }
+        } catch (e) {
+            // Ignore fetch errors (offline etc)
+        }
+    }
+
+    handleWakeWordText(text) {
+        text = text.toLowerCase().trim();
+        if (!text) return;
+        
+        // Logic from original SpeechRecognition.onresult
+        
+        // Check for mute/unmute commands (only when not recording)
+        if (!this.isRecording) {
+            const muteAction = this.detectMuteCommand(text);
+            if (muteAction) {
+                console.log('Mute command detected:', muteAction);
+                this.transcript.textContent = muteAction === 'mute' ? 'Muting voice...' : 'Unmuting voice...';
+                this.handleMuteCommand(muteAction);
+                return;
+            }
+        }
+        
+        // Check for wake words (only when not recording)
+        if (!this.isRecording) {
+            for (const wake of this.wakeWords) {
+                if (text.includes(wake)) {
+                    console.log('Wake word detected:', wake);
+                    this.transcript.textContent = `Wake word detected: "${wake}"`;
+                    
+                    if (this.isSpeaking) {
+                        this.stopCurrentAudio();
+                    }
+                    
+                    this.startRecording(true);
+                    return;
+                }
+            }
+        }
+        
+        // Check for stop words (only if voice-triggered recording)
+        if (this.isRecording && this.triggeredByVoice) {
+            for (const stop of this.stopWords) {
+                if (text.includes(stop)) {
+                    console.log('Stop word detected:', stop);
+                    this.stopRecording();
+                    return;
+                }
+            }
+        }
+        
+        // Check for abort/extend (during auto-submit)
+        if (this.autoSubmitActive && !this.isRecording) {
+            for (const abort of this.abortWords) {
+                if (text.includes(abort)) {
+                    this.cancelAutoSubmit();
+                    this.transcript.textContent = `Aborted: "${abort}"`;
                     return;
                 }
             }
             
-            // Check for wake words (only when not recording)
-            if (!this.isRecording) {
-                for (const wake of this.wakeWords) {
-                    if (text.includes(wake)) {
-                        console.log('Wake word detected:', wake);
-                        this.transcript.textContent = `Wake word detected: "${wake}"`;
-                        this.startRecording(true);  // Pass true for voice-triggered
-                        return;
-                    }
+            for (const extend of this.extendWords) {
+                if (text.includes(extend)) {
+                    this.cancelAutoSubmit();
+                    this.pendingExtendText = this.chatInput.value;
+                    this.transcript.textContent = `Extending: "${extend}"`;
+                    this.startRecording(true);
+                    return;
                 }
-            }
-            
-            // Check for stop words during recording (only for voice-triggered recording)
-            if (this.isRecording && this.triggeredByVoice) {
-                for (const stop of this.stopWords) {
-                    if (text.includes(stop)) {
-                        console.log('Stop word detected:', stop);
-                        this.transcript.textContent = `Stop command: "${stop}"`;
-                        this.stopRecording();
-                        return;
-                    }
-                }
-            }
-            
-            // Check for abort words during auto-submit countdown (only when not recording)
-            if (this.autoSubmitActive && !this.isRecording) {
-                for (const abort of this.abortWords) {
-                    if (text.includes(abort)) {
-                        console.log('Abort word detected:', abort);
-                        this.cancelAutoSubmit();
-                        this.transcript.textContent = `Aborted: "${abort}" - text kept for editing`;
-                        // Keep the text in the input, just cancel auto-send
-                        return;
-                    }
-                }
-                
-                // Check for extend words during auto-submit countdown
-                for (const extend of this.extendWords) {
-                    if (text.includes(extend)) {
-                        console.log('Extend word detected:', extend);
-                        this.cancelAutoSubmit();
-                        this.pendingExtendText = this.chatInput.value;  // Save current text
-                        this.transcript.textContent = `Extending: "${extend}" - record more to append`;
-                        this.startRecording(true);  // Start recording again
-                        return;
-                    }
-                }
-            }
-        };
-
-        this.recognition.onerror = (event) => {
-            console.warn('Speech recognition error:', event.error);
-            if (event.error === 'not-allowed' || event.error === 'audio-capture') {
-                this.wakeWordStatus.innerHTML = '<span class="indicator" style="background: #cf222e;"></span> Microphone permission denied';
-                this.wakeWordStatus.classList.add('inactive');
-                this.wakeWordActive = false;  // Stop retrying if permission denied
-            }
-        };
-
-        this.recognition.onend = () => {
-            // Restart recognition in these cases:
-            // 1. Not recording - keep listening for wake words
-            // 2. Recording triggered by voice - need to listen for "stop" command
-            // 3. Auto-submit countdown active - need to listen for "abort" command
-            const shouldRestart = this.wakeWordActive && 
-                                  !this.wakeWordStatus.classList.contains('inactive') &&
-                                  (!this.isRecording || this.triggeredByVoice || this.autoSubmitActive);
-            
-            if (shouldRestart) {
-                setTimeout(() => {
-                    try {
-                        this.recognition.start();
-                        console.log('Speech recognition restarted, isRecording:', this.isRecording);
-                    } catch (e) {
-                        console.warn('Could not restart recognition:', e);
-                    }
-                }, 100);  // Quick restart for responsive stop detection
-            }
-        };
-
-        // Start wake word listening
-        this.startWakeWordDetection();
-    }
-
-    startWakeWordDetection() {
-        if (this.recognition && !this.wakeWordActive) {
-            try {
-                this.recognition.start();
-                this.wakeWordActive = true;
-                this.wakeWordStatus.innerHTML = '<span class="indicator"></span> Listening for wake word...';
-                this.wakeWordStatus.classList.remove('inactive');
-            } catch (e) {
-                console.warn('Could not start wake word detection:', e);
             }
         }
     }
 
     stopWakeWordDetection() {
-        if (this.recognition && this.wakeWordActive) {
-            this.wakeWordActive = false;
-            try {
-                this.recognition.stop();
-            } catch (e) {
-                console.warn('Could not stop recognition:', e);
-            }
+        this.wakeWordActive = false;
+        if (this.wakeWordLoopTimer) {
+            clearTimeout(this.wakeWordLoopTimer);
+            this.wakeWordLoopTimer = null;
         }
+        // Do NOT stop the stream here because we might need it for re-starting
+        // or if it's shared. But we should stop recording.
+        // The recorder.stop() in loop handles cleanup.
     }
 
     async startRecording(triggeredByWakeWord = false) {
@@ -461,10 +537,17 @@ class VoiceCopilot {
         // Convert to WAV for better compatibility with Whisper
         const wavBlob = await this.convertToWav(audioBlob);
 
+        // Show process steps
+        this.showProcessSteps();
+
         try {
             // Step 1: Transcribe
+            this.setProcessStep('transcribe', 'active');
+            this.startActivityStatus('transcribe');
             this.transcript.textContent = 'Transcribing...';
             const transcription = await this.transcribe(wavBlob);
+            this.setProcessStep('transcribe', 'complete');
+            this.stopActivityStatus();
             
             if (!transcription.text || transcription.text.trim() === '') {
                 this.transcript.textContent = 'No speech detected';
@@ -492,6 +575,7 @@ class VoiceCopilot {
         } catch (error) {
             console.error('Error processing recording:', error);
             this.showError('Error: ' + error.message);
+            this.stopActivityStatus();
             this.updateUI('ready');
         }
 
@@ -592,37 +676,85 @@ class VoiceCopilot {
         // Add user message to conversation
         this.addMessage('user', message);
 
+        // Show process steps and set thinking as active
+        this.showProcessSteps();
+        this.setProcessStep('transcribe', 'complete');  // Already done if voice input
+        this.setProcessStep('thinking', 'active');
+        this.startActivityStatus('thinking');
+
         // Send to Copilot
         this.updateUI('processing');
         this.status.innerHTML = 'Thinking<span class="loading"></span>';
         this.sendBtn.disabled = true;
 
         try {
-            const response = await this.sendToCopilot(message);
-            this.addMessage('copilot', response.response);
+            let response;
+            
+            if (this.useStreaming) {
+                // Use streaming for real-time response
+                this.addStreamingMessage();
+                
+                response = await this.sendToCopilotStreaming(
+                    message,
+                    // onDelta - update streaming message with each chunk
+                    (content) => {
+                        this.updateStreamingMessage(content);
+                    },
+                    // onIntent - update activity status
+                    (intent) => {
+                        this.updateActivityText(intent);
+                    },
+                    // onToolStart - show tool execution
+                    (toolName) => {
+                        this.startActivityStatus('tool', toolName);
+                    },
+                    // onToolComplete
+                    (toolName) => {
+                        this.startActivityStatus('thinking');
+                    }
+                );
+                
+                // Finalize the streaming message
+                this.finalizeStreamingMessage(response.response);
+            } else {
+                // Non-streaming fallback
+                response = await this.sendToCopilot(message);
+                this.addMessage('copilot', response.response);
+            }
+            
+            this.setProcessStep('thinking', 'complete');
             
             // Update session ID if returned
             if (response.session_id) {
                 this.updateSessionId(response.session_id);
             }
 
-            // Stop wake word detection while speaking to prevent feedback loop
-            this.stopWakeWordDetection();
+            // Keep wake word detection active during speech so user can interrupt
+            // (Previously we stopped it here, but now we allow interruption)
             
             // Speak the response
+            this.setProcessStep('speaking', 'active');
+            this.startActivityStatus('speaking');
             this.updateUI('speaking');
             await this.speak(response.voice_status || response.response);
+            this.setProcessStep('speaking', 'complete');
+            this.stopActivityStatus();
 
             this.updateUI('ready');
             
             // Refresh CWD in case it changed
             this.fetchCwd();
             
-            // Resume wake word detection after speaking
+            // Ensure wake word detection is running (restart if needed)
             this.startWakeWordDetection();
         } catch (error) {
             console.error('Error sending message:', error);
+            // Clean up streaming message if it exists
+            if (this.currentStreamingMessage) {
+                this.finalizeStreamingMessage('Error: ' + error.message);
+            }
             this.showError('Error: ' + error.message);
+            this.stopActivityStatus();
             this.updateUI('ready');
             this.startWakeWordDetection();
         }
@@ -747,6 +879,7 @@ class VoiceCopilot {
         if ('speechSynthesis' in window) {
             speechSynthesis.cancel();
         }
+        this.isSpeaking = false;
     }
 
     // Folder picker methods
@@ -1102,6 +1235,216 @@ class VoiceCopilot {
         return data;
     }
 
+    async sendToCopilotStreaming(message, onDelta, onIntent, onToolStart, onToolComplete) {
+        /**
+         * Send message to Copilot with streaming support via SSE
+         * @param {string} message - The message to send
+         * @param {function} onDelta - Callback for text chunks: (content) => void
+         * @param {function} onIntent - Callback for intent updates: (intent) => void
+         * @param {function} onToolStart - Callback when tool starts: (toolName) => void
+         * @param {function} onToolComplete - Callback when tool completes: (toolName) => void
+         * @returns {Promise<{response: string, voice_status: string, session_id: string}>}
+         */
+        console.log('[STREAM] Starting streaming request:', message);
+        
+        return new Promise((resolve, reject) => {
+            // Use fetch with ReadableStream for SSE
+            fetch('/api/chat/stream', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message })
+            }).then(response => {
+                if (!response.ok) {
+                    throw new Error('Stream request failed');
+                }
+                
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let collectedContent = '';
+                let sessionId = null;
+                let voiceStatus = '';
+                
+                const processChunk = ({ done, value }) => {
+                    if (done) {
+                        console.log('[STREAM] Stream ended');
+                        resolve({
+                            response: collectedContent,
+                            voice_status: voiceStatus,
+                            session_id: sessionId
+                        });
+                        return;
+                    }
+                    
+                    buffer += decoder.decode(value, { stream: true });
+                    
+                    // Process complete SSE messages (data: ...\n\n)
+                    const lines = buffer.split('\n\n');
+                    buffer = lines.pop() || '';  // Keep incomplete line in buffer
+                    
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const event = JSON.parse(line.substring(6));
+                                console.log('[STREAM] Event:', event.type);
+                                
+                                switch (event.type) {
+                                    case 'session':
+                                        sessionId = event.session_id;
+                                        break;
+                                    
+                                    case 'delta':
+                                        collectedContent += event.content;
+                                        if (onDelta) onDelta(event.content);
+                                        break;
+                                    
+                                    case 'message':
+                                        // Complete message (if not streaming deltas)
+                                        collectedContent = event.content;
+                                        if (onDelta) onDelta(event.content);
+                                        break;
+                                    
+                                    case 'intent':
+                                        if (onIntent) onIntent(event.intent);
+                                        break;
+                                    
+                                    case 'tool_start':
+                                        if (onToolStart) onToolStart(event.tool);
+                                        break;
+                                    
+                                    case 'tool_complete':
+                                        if (onToolComplete) onToolComplete(event.tool);
+                                        break;
+                                    
+                                    case 'complete':
+                                        collectedContent = event.content || collectedContent;
+                                        voiceStatus = event.voice_status || '';
+                                        sessionId = event.session_id || sessionId;
+                                        break;
+                                    
+                                    case 'error':
+                                        console.error('[STREAM] Error event:', event.message);
+                                        reject(new Error(event.message));
+                                        return;
+                                    
+                                    case 'turn_start':
+                                    case 'turn_end':
+                                    case 'tool_progress':
+                                    case 'keepalive':
+                                        // Informational, no action needed
+                                        break;
+                                }
+                            } catch (e) {
+                                console.warn('[STREAM] Failed to parse event:', line, e);
+                            }
+                        }
+                    }
+                    
+                    // Continue reading
+                    reader.read().then(processChunk).catch(reject);
+                };
+                
+                reader.read().then(processChunk).catch(reject);
+                
+            }).catch(reject);
+        });
+    }
+
+    addStreamingMessage() {
+        /**
+         * Add a placeholder message for streaming content
+         * Returns the content element that can be updated
+         */
+        this.conversation.classList.add('active');
+        
+        const messageDiv = document.createElement('div');
+        messageDiv.className = 'message copilot streaming';
+        
+        const label = document.createElement('div');
+        label.className = 'label';
+        label.textContent = 'Copilot';
+        
+        const content = document.createElement('div');
+        content.className = 'message-content';
+        content.innerHTML = '<span class="streaming-cursor">▊</span>';
+        
+        messageDiv.appendChild(label);
+        messageDiv.appendChild(content);
+        this.conversation.appendChild(messageDiv);
+        
+        // Scroll to bottom
+        this.conversation.scrollTop = this.conversation.scrollHeight;
+        
+        this.currentStreamingMessage = { div: messageDiv, content: content, text: '' };
+        return this.currentStreamingMessage;
+    }
+
+    updateStreamingMessage(deltaText) {
+        /**
+         * Append text to the streaming message
+         */
+        if (!this.currentStreamingMessage) return;
+        
+        this.currentStreamingMessage.text += deltaText;
+        const text = this.currentStreamingMessage.text;
+        
+        // Render markdown with cursor at end
+        if (typeof marked !== 'undefined') {
+            this.currentStreamingMessage.content.innerHTML = 
+                marked.parse(text) + '<span class="streaming-cursor">▊</span>';
+        } else {
+            this.currentStreamingMessage.content.innerHTML = 
+                text + '<span class="streaming-cursor">▊</span>';
+        }
+        
+        // Scroll to bottom
+        this.conversation.scrollTop = this.conversation.scrollHeight;
+    }
+
+    finalizeStreamingMessage(fullText) {
+        /**
+         * Finalize the streaming message with complete text
+         */
+        if (!this.currentStreamingMessage) return;
+        
+        const { div, content } = this.currentStreamingMessage;
+        div.classList.remove('streaming');
+        
+        // Render final markdown without cursor
+        if (typeof marked !== 'undefined') {
+            content.innerHTML = marked.parse(fullText || '(empty response)');
+        } else {
+            content.textContent = fullText || '(empty response)';
+        }
+        
+        // Add long-press to copy functionality
+        let pressTimer = null;
+        const startPress = () => {
+            pressTimer = setTimeout(() => {
+                navigator.clipboard.writeText(fullText).then(() => {
+                    div.classList.add('copied');
+                    this.transcript.textContent = '📋 Copied to clipboard!';
+                    setTimeout(() => div.classList.remove('copied'), 1000);
+                }).catch(err => console.error('Failed to copy:', err));
+            }, 500);
+        };
+        const cancelPress = () => {
+            if (pressTimer) {
+                clearTimeout(pressTimer);
+                pressTimer = null;
+            }
+        };
+        
+        div.addEventListener('mousedown', startPress);
+        div.addEventListener('mouseup', cancelPress);
+        div.addEventListener('mouseleave', cancelPress);
+        div.addEventListener('touchstart', startPress);
+        div.addEventListener('touchend', cancelPress);
+        div.addEventListener('touchcancel', cancelPress);
+        
+        this.currentStreamingMessage = null;
+    }
+
     async speak(text) {
         // Check if muted - skip TTS entirely
         if (this.isMuted) {
@@ -1110,6 +1453,15 @@ class VoiceCopilot {
         }
 
         console.log('[SPEAK] Speaking text:', text);
+        
+        // Handle empty text
+        if (!text || !text.trim()) {
+            console.log('[SPEAK] Empty text, skipping');
+            return;
+        }
+        
+        this.isSpeaking = true;
+        
         try {
             const response = await fetch('/api/speak', {
                 method: 'POST',
@@ -1119,53 +1471,97 @@ class VoiceCopilot {
 
             if (!response.ok) {
                 // Fallback to browser TTS
-                this.speakWithBrowserTTS(text);
-                return;
+                console.log('[SPEAK] API response not ok, falling back to browser TTS');
+                return this.speakWithBrowserTTS(text);
             }
 
             const audioBlob = await response.blob();
-            console.log('TTS audio blob size:', audioBlob.size);
-            const audioUrl = URL.createObjectURL(audioBlob);
+            console.log('[SPEAK] Audio blob size:', audioBlob.size, 'type:', audioBlob.type);
+            
+            // Check for empty or too-small audio (just WAV header)
+            if (audioBlob.size < 100) {
+                console.log('[SPEAK] Audio too small, falling back to browser TTS');
+                return this.speakWithBrowserTTS(text);
+            }
+            
+            // Ensure blob has correct MIME type for WAV audio playback
+            const wavBlob = new Blob([audioBlob], { type: 'audio/wav' });
+            const audioUrl = URL.createObjectURL(wavBlob);
             const audio = new Audio(audioUrl);
-            this.currentAudio = audio;  // Track for mute interruption
+            this.currentAudio = audio;
             
             return new Promise((resolve) => {
                 audio.onended = () => {
-                    console.log('TTS audio playback ended');
+                    console.log('[SPEAK] Audio playback ended');
                     URL.revokeObjectURL(audioUrl);
                     this.currentAudio = null;
+                    this.isSpeaking = false;
                     resolve();
                 };
                 audio.onerror = (e) => {
-                    console.error('TTS audio error:', e);
+                    console.error('[SPEAK] Audio error:', e);
                     URL.revokeObjectURL(audioUrl);
                     this.currentAudio = null;
-                    this.speakWithBrowserTTS(text);
-                    resolve();
+                    this.isSpeaking = false;
+                    this.speakWithBrowserTTS(text).then(resolve);
                 };
                 audio.play().then(() => {
-                    console.log('TTS audio playing');
+                    console.log('[SPEAK] Audio playing');
                 }).catch((e) => {
-                    console.error('TTS play() failed:', e);
+                    console.error('[SPEAK] play() failed:', e);
                     this.currentAudio = null;
-                    this.speakWithBrowserTTS(text);
-                    resolve();
+                    this.isSpeaking = false;
+                    URL.revokeObjectURL(audioUrl);
+                    this.speakWithBrowserTTS(text).then(resolve);
                 });
             });
 
         } catch (error) {
-            console.warn('Piper TTS failed, using browser TTS:', error);
-            this.speakWithBrowserTTS(text);
+            console.warn('[SPEAK] Fetch failed, using browser TTS:', error);
+            return this.speakWithBrowserTTS(text);
+        } finally {
+            // Ensure isSpeaking is reset if we exit early
+            // (actual reset happens in onended/onerror for audio playback)
         }
     }
 
     speakWithBrowserTTS(text) {
-        if (this.isMuted) return;  // Respect mute for browser TTS too
-        if ('speechSynthesis' in window) {
-            const utterance = new SpeechSynthesisUtterance(text);
-            utterance.rate = 1.1;
-            speechSynthesis.speak(utterance);
+        if (this.isMuted) {
+            this.isSpeaking = false;
+            return Promise.resolve();
         }
+        
+        // Handle empty text
+        if (!text || !text.trim()) {
+            console.log('[SPEAK] Empty text, skipping browser TTS');
+            this.isSpeaking = false;
+            return Promise.resolve();
+        }
+        
+        this.isSpeaking = true;
+        
+        return new Promise((resolve) => {
+            if ('speechSynthesis' in window) {
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.rate = 1.1;
+                utterance.onend = () => {
+                    console.log('[SPEAK] Browser TTS ended');
+                    this.isSpeaking = false;
+                    resolve();
+                };
+                utterance.onerror = (e) => {
+                    console.error('[SPEAK] Browser TTS error:', e);
+                    this.isSpeaking = false;
+                    resolve();
+                };
+                speechSynthesis.speak(utterance);
+                console.log('[SPEAK] Browser TTS started');
+            } else {
+                console.warn('[SPEAK] No speechSynthesis support');
+                this.isSpeaking = false;
+                resolve();
+            }
+        });
     }
 
     addMessage(type, text) {
@@ -1181,7 +1577,13 @@ class VoiceCopilot {
         
         const content = document.createElement('div');
         content.className = 'message-content';
-        content.textContent = text || '(empty response)';
+        
+        // Render markdown for Copilot responses, plain text for user messages
+        if (type === 'copilot' && typeof marked !== 'undefined') {
+            content.innerHTML = marked.parse(text || '(empty response)');
+        } else {
+            content.textContent = text || '(empty response)';
+        }
         
         messageDiv.appendChild(label);
         messageDiv.appendChild(content);
@@ -1221,6 +1623,51 @@ class VoiceCopilot {
         console.log('[MESSAGE] Message added, conversation children:', this.conversation.children.length);
     }
 
+    async resetSession() {
+        console.log('[SESSION] Resetting session...');
+        
+        try {
+            // Call backend to reset Copilot session
+            const response = await fetch('/api/session/reset', { method: 'POST' });
+            const data = await response.json();
+            
+            if (data.success) {
+                // Clear conversation UI
+                this.conversation.innerHTML = '';
+                this.conversation.classList.remove('active');
+                
+                // Clear transcript and input
+                this.transcript.textContent = '';
+                this.chatInput.value = '';
+                
+                // Reset session ID display
+                if (this.sessionIdValue) {
+                    this.sessionIdValue.textContent = '';
+                    document.getElementById('session-id').style.display = 'none';
+                }
+                
+                // Reset context display
+                const donutFill = document.getElementById('donut-fill');
+                const contextPercent = document.getElementById('context-percent');
+                if (donutFill) donutFill.setAttribute('stroke-dasharray', '0, 100');
+                if (contextPercent) contextPercent.textContent = '0%';
+                
+                // Update status
+                this.status.textContent = 'New session started';
+                setTimeout(() => {
+                    this.status.textContent = 'Ready';
+                }, 2000);
+                
+                console.log('[SESSION] Session reset successfully');
+            } else {
+                console.error('[SESSION] Reset failed:', data);
+            }
+        } catch (error) {
+            console.error('[SESSION] Reset error:', error);
+            this.status.textContent = 'Failed to reset session';
+        }
+    }
+
     updateUI(state) {
         this.recordBtn.classList.remove('recording');
         this.status.classList.remove('recording', 'processing', 'speaking');
@@ -1247,6 +1694,128 @@ class VoiceCopilot {
                 this.updateRecordButtonText();
                 this.status.textContent = 'Ready';
                 this.triggeredByVoice = false;  // Reset on ready state
+                this.hideProcessSteps();
+        }
+    }
+
+    // Process steps indicator methods
+    showProcessSteps() {
+        if (this.processSteps) {
+            this.processSteps.style.display = 'flex';
+            // Reset all steps
+            this.processSteps.querySelectorAll('.process-step').forEach(step => {
+                step.classList.remove('active', 'complete');
+            });
+        }
+    }
+
+    hideProcessSteps() {
+        if (this.processSteps) {
+            this.processSteps.style.display = 'none';
+        }
+    }
+
+    setProcessStep(stepName, state) {
+        // state: 'active', 'complete', or 'pending'
+        if (!this.processSteps) return;
+        
+        const step = this.processSteps.querySelector(`[data-step="${stepName}"]`);
+        if (step) {
+            step.classList.remove('active', 'complete');
+            if (state === 'active') {
+                step.classList.add('active');
+            } else if (state === 'complete') {
+                step.classList.add('complete');
+            }
+        }
+    }
+
+    // Activity Status Bar - Copilot CLI-style cycling verbs
+    startActivityStatus(phase, toolName = null) {
+        if (!this.activityStatus || !this.activityVerb || !this.activityText) return;
+        
+        // Copilot CLI-inspired verb + context pairs
+        const messages = {
+            transcribe: [
+                { verb: 'Listening', text: 'to your voice...' },
+                { verb: 'Converting', text: 'speech to text...' },
+                { verb: 'Processing', text: 'audio input...' },
+                { verb: 'Decoding', text: 'your words...' }
+            ],
+            thinking: [
+                { verb: 'Thinking', text: 'about your request...' },
+                { verb: 'Analyzing', text: 'the context...' },
+                { verb: 'Reasoning', text: 'through possibilities...' },
+                { verb: 'Searching', text: 'for the best answer...' },
+                { verb: 'Crafting', text: 'a thoughtful response...' },
+                { verb: 'Connecting', text: 'the dots...' },
+                { verb: 'Considering', text: 'different angles...' },
+                { verb: 'Formulating', text: 'insights...' }
+            ],
+            speaking: [
+                { verb: 'Speaking', text: 'the response...' },
+                { verb: 'Reading', text: 'aloud for you...' }
+            ],
+            tool: [
+                { verb: 'Running', text: toolName || 'a tool...' },
+                { verb: 'Executing', text: toolName || 'command...' }
+            ]
+        };
+
+        const phaseMessages = messages[phase] || messages.thinking;
+        let index = 0;
+
+        // Clear any existing interval
+        this.stopActivityStatus();
+
+        // Set initial message and show
+        this.activityStatus.style.display = 'flex';
+        this.activityStatus.className = `activity-status ${phase}`;
+        this.activityVerb.textContent = phaseMessages[0].verb;
+        this.activityText.textContent = phaseMessages[0].text;
+
+        // Cycle through messages faster for more dynamic feel
+        this.activityInterval = setInterval(() => {
+            index = (index + 1) % phaseMessages.length;
+            
+            // Animate the verb
+            this.activityVerb.style.animation = 'none';
+            this.activityVerb.offsetHeight; // Trigger reflow
+            this.activityVerb.style.animation = 'verbFade 0.4s ease-in-out';
+            this.activityVerb.textContent = phaseMessages[index].verb;
+            
+            // Animate the text
+            this.activityText.style.animation = 'none';
+            this.activityText.offsetHeight; // Trigger reflow
+            this.activityText.style.animation = 'textSlide 0.4s ease-in-out';
+            this.activityText.textContent = phaseMessages[index].text;
+        }, 1500);  // Faster cycling for more engagement
+    }
+
+    updateActivityText(intentText) {
+        /**
+         * Update activity status with intent from Copilot
+         */
+        if (!this.activityVerb || !this.activityText) return;
+        
+        // Stop cycling, show the actual intent
+        if (this.activityInterval) {
+            clearInterval(this.activityInterval);
+            this.activityInterval = null;
+        }
+        
+        this.activityVerb.textContent = 'Working on';
+        this.activityText.textContent = intentText;
+    }
+
+    stopActivityStatus() {
+        if (this.activityInterval) {
+            clearInterval(this.activityInterval);
+            this.activityInterval = null;
+        }
+        if (this.activityStatus) {
+            this.activityStatus.style.display = 'none';
+            this.activityStatus.className = 'activity-status';
         }
     }
 
