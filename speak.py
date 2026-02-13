@@ -60,7 +60,9 @@ def speak_piper(text: str, voice: str = DEFAULT_VOICE):
 
     try:
         result = subprocess.run(
-            [str(PIPER_EXE), "--model", str(model_path), "--output_file", tmp_path],
+            [str(PIPER_EXE), "--model", str(model_path),
+             "--length_scale", "0.75", "--sentence_silence", "0.15",
+             "--output_file", tmp_path],
             input=text.encode("utf-8"),
             capture_output=True, timeout=30
         )
