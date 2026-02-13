@@ -147,15 +147,15 @@ def detect_wake_word(audio: np.ndarray) -> bool:
 
 
 def record_utterance() -> str:
-    """Continuous streaming: records in background, transcribes latest 3s chunk each cycle.
+    """Continuous streaming: records in background, transcribes latest chunk each cycle.
     
-    Only transcribes the newest audio (not the growing buffer) to keep latency constant.
+    Only transcribes the newest ~2s of audio (caps buffer to prevent snowballing).
     Appends each chunk's text to build the full prompt.
     """
-    print("[COCO] 🎙️  Streaming... (say 'send', 'go', or 'done' to submit)")
+    print("[COCO] 🎙️  Streaming... (say \"fire\" to submit)")
     
     rate = NATIVE_RATE or 44100
-    audio_chunks = []       # List of 2s chunks for processing
+    max_chunk_samples = int(CHUNK_DURATION * rate * 1.5)  # cap at 3s to prevent snowball
     chunk_lock = threading.Lock()
     current_chunk = []      # Accumulates audio blocks for current chunk
     
@@ -187,11 +187,18 @@ def record_utterance() -> str:
                 chunk_audio = np.concatenate(current_chunk)
                 current_chunk.clear()
             
+            # Cap chunk size to prevent snowball: if transcription was slow
+            # and audio accumulated, only keep the latest ~3s
+            if len(chunk_audio) > max_chunk_samples:
+                dropped_s = (len(chunk_audio) - max_chunk_samples) / rate
+                chunk_audio = chunk_audio[-max_chunk_samples:]
+                print(f"[COCO] ✂️  Trimmed chunk (dropped {dropped_s:.1f}s overflow)")
+            
             level = rms(chunk_audio)
             if level < SILENCE_THRESHOLD:
                 continue
             
-            # Transcribe ONLY this 2s chunk (constant time, ~1-2s)
+            # Transcribe ONLY this chunk (constant time, ~1-2s)
             text = transcribe(chunk_audio, beam_size=3)
             
             if not text:
@@ -199,21 +206,17 @@ def record_utterance() -> str:
             
             print(f"[COCO] 💬 #{chunk_num}: \"{text}\"")
             
-            # Check for dispatch word in this chunk
-            text_lower = text.lower().strip().rstrip('.,!? ')
-            dispatched = False
-            clean_text = text.strip()
-            for dw in DISPATCH_WORDS:
-                if text_lower.endswith(dw) or dw in text_lower.split():
-                    # Remove dispatch word
-                    idx = text_lower.rfind(dw)
-                    before = text[:idx].strip()
-                    if before:
-                        all_parts.append(before)
-                    dispatched = True
-                    break
+            # Check for dispatch word — STRICT: must be the last word only
+            words = text.strip().rstrip('.,!? ').split()
+            last_word = words[-1].lower().strip('.,!? ') if words else ""
+            dispatched = last_word in DISPATCH_WORDS
             
-            if not dispatched:
+            if dispatched:
+                # Remove dispatch word from text
+                clean_text = " ".join(words[:-1]).strip()
+                if clean_text:
+                    all_parts.append(clean_text)
+            else:
                 all_parts.append(text.strip())
             
             # Build full prompt
