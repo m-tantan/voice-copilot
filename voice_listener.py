@@ -283,29 +283,34 @@ def main_loop():
 
     dispatch_display = " / ".join(f'"{w}"' for w in DISPATCH_WORDS[:3])
 
+    C = "\033[36m"    # cyan
+    G = "\033[32m"    # green
+    Y = "\033[33m"    # yellow
+    D = "\033[2m"     # dim
+    B = "\033[1m"     # bold
+    R = "\033[0m"     # reset
+
     print()
-    print("  ╔══════════════════════════════════════════════╗")
-    print("  ║                                              ║")
-    print("  ║          🥥  C O C O                         ║")
-    print("  ║          Offline Voice Assistant              ║")
-    print("  ║                                              ║")
-    print("  ╠══════════════════════════════════════════════╣")
-    print("  ║                                              ║")
-    print(f"  ║  Wake word    │  \"Coco\"                      ║")
-    print(f"  ║  Dispatch     │  {dispatch_display:<28s}║")
-    print(f"  ║  Microphone   │  {info['name'][:28]:<28s}║")
-    print(f"  ║  Sample rate  │  {NATIVE_RATE}Hz{'':<23s}║")
-    print(f"  ║  Model        │  whisper-{WHISPER_MODEL:<19s}║")
-    print("  ║                                              ║")
-    print("  ╠══════════════════════════════════════════════╣")
-    print("  ║  Say \"Coco\" → speak → \"fire\" to submit      ║")
-    print("  ║  Press Ctrl+C to stop                        ║")
-    print("  ╚══════════════════════════════════════════════╝")
+    print(f"{C}        ██████╗  ██████╗  ██████╗  ██████╗ ")
+    print(f"       ██╔════╝ ██╔═══██╗██╔════╝ ██╔═══██╗")
+    print(f"       ██║      ██║   ██║██║      ██║   ██║")
+    print(f"       ██║      ██║   ██║██║      ██║   ██║")
+    print(f"       ╚██████╗ ╚██████╔╝╚██████╗ ╚██████╔╝")
+    print(f"        ╚═════╝  ╚═════╝  ╚═════╝  ╚═════╝ {R}")
+    print(f"{D}        Offline Voice Assistant for Copilot CLI{R}")
+    print()
+    print(f"  {G}●{R} Wake word     {B}\"Coco\"{R}")
+    print(f"  {G}●{R} Dispatch      {B}{dispatch_display}{R}")
+    print(f"  {G}●{R} Mic           {info['name']} @ {NATIVE_RATE}Hz")
+    print(f"  {G}●{R} Model         whisper-{WHISPER_MODEL}")
+    print()
+    print(f"  {Y}Say \"Coco\" → speak your prompt → \"fire\" to submit{R}")
+    print(f"  {D}Ctrl+C to stop{R}")
     print()
 
     # Pre-load model
     get_whisper()
-    print("[COCO] ✅ Listening for wake word...")
+    print(f"  {G}●{R} Ready — listening for wake word...")
 
     while _listening:
         try:
