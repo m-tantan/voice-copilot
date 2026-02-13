@@ -240,10 +240,16 @@ def record_utterance() -> str:
                 pending_text = clean_text
                 stable_count = 0
             
-            # Type new characters into terminal (only append, never go backwards)
+            # Type new characters into terminal via clipboard (reliable, no dropped keys)
             if len(full_prompt) > typed_len:
                 new_chars = full_prompt[typed_len:]
-                keyboard.write(new_chars, delay=0.005)
+                pyperclip.copy(new_chars)
+                time.sleep(0.05)
+                keyboard.press('ctrl')
+                time.sleep(0.03)
+                keyboard.press_and_release('v')
+                time.sleep(0.03)
+                keyboard.release('ctrl')
                 typed_len = len(full_prompt)
             
             if dispatched:
