@@ -147,18 +147,18 @@ def detect_wake_word(audio: np.ndarray) -> bool:
 
 
 def record_utterance() -> str:
-    """Continuous streaming: records in background, transcribes latest chunk each cycle.
+    """Sliding window streaming: re-transcribes the last ~8s each cycle for full context.
     
-    Uses overlapping chunks (0.5s overlap) to avoid losing words at boundaries.
-    Only transcribes the newest audio (capped) to keep latency constant.
+    Unlike isolated chunk transcription, this gives Whisper full sentence context
+    so words at boundaries are never lost. The window slides forward as audio grows.
     """
     print("[COCO] 🎙️  Streaming... (say \"fire\" to submit)")
     
     rate = NATIVE_RATE or 44100
-    max_chunk_samples = int(CHUNK_DURATION * rate * 1.5)  # cap at 3s to prevent snowball
-    overlap_samples = int(0.5 * rate)  # 0.5s overlap between chunks
+    max_window_s = 8.0      # sliding window size in seconds
+    max_window_samples = int(max_window_s * rate)
     chunk_lock = threading.Lock()
-    current_chunk = []      # Accumulates audio blocks for current chunk
+    current_chunk = []      # Accumulates audio blocks between cycles
     
     def audio_callback(indata, frames, time_info, status):
         if status:
@@ -170,11 +170,13 @@ def record_utterance() -> str:
                            blocksize=int(rate * 0.25), callback=audio_callback)
     stream.start()
     
-    all_parts = []          # Transcribed text parts
-    typed_len = 0           # How many chars we've typed into terminal
+    audio_buffer = np.array([], dtype=np.int16)  # Rolling audio window
+    committed_text = ""     # Text already typed (won't be revised)
+    pending_text = ""       # Latest transcription (may be revised next cycle)
+    typed_len = 0           # How many chars typed into terminal
     start_time = time.time()
     chunk_num = 0
-    prev_tail = None        # Last 0.5s of previous chunk for overlap
+    stable_count = 0        # How many cycles pending_text stayed the same
     
     try:
         while True:
@@ -182,60 +184,65 @@ def record_utterance() -> str:
             chunk_num += 1
             elapsed = time.time() - start_time
             
-            # Grab the current chunk and reset for next cycle
+            # Grab new audio
             with chunk_lock:
                 if not current_chunk:
                     continue
-                chunk_audio = np.concatenate(current_chunk)
+                new_audio = np.concatenate(current_chunk)
                 current_chunk.clear()
             
-            # Cap chunk size to prevent snowball
-            if len(chunk_audio) > max_chunk_samples:
-                dropped_s = (len(chunk_audio) - max_chunk_samples) / rate
-                chunk_audio = chunk_audio[-max_chunk_samples:]
-                print(f"[COCO] ✂️  Trimmed chunk (dropped {dropped_s:.1f}s overflow)")
+            # Append to rolling buffer
+            audio_buffer = np.concatenate([audio_buffer, new_audio])
             
-            # Prepend overlap from previous chunk to catch boundary words
-            if prev_tail is not None:
-                chunk_with_overlap = np.concatenate([prev_tail, chunk_audio])
-            else:
-                chunk_with_overlap = chunk_audio
+            # Trim to sliding window (keep latest ~8s)
+            if len(audio_buffer) > max_window_samples:
+                audio_buffer = audio_buffer[-max_window_samples:]
             
-            # Save tail for next overlap
-            prev_tail = chunk_audio[-overlap_samples:] if len(chunk_audio) > overlap_samples else chunk_audio.copy()
-            
-            level = rms(chunk_audio)
+            level = rms(new_audio)
             if level < SILENCE_THRESHOLD:
                 continue
             
-            # Transcribe with overlap (beam_size=1 for speed during live streaming)
-            text = transcribe(chunk_with_overlap, beam_size=1)
+            # Re-transcribe the full window — Whisper gets full sentence context
+            text = transcribe(audio_buffer, beam_size=1).strip()
             
             if not text:
                 continue
             
             print(f"[COCO] 💬 #{chunk_num}: \"{text}\"")
             
-            # Check for dispatch word — STRICT: must be the last word only
-            words = text.strip().rstrip('.,!? ').split()
+            # Check for dispatch word — last word only
+            words = text.rstrip('.,!? ').split()
             last_word = words[-1].lower().strip('.,!? ') if words else ""
             dispatched = last_word in DISPATCH_WORDS
             
             if dispatched:
-                # Remove dispatch word from text
                 clean_text = " ".join(words[:-1]).strip()
-                if clean_text:
-                    all_parts.append(clean_text)
             else:
-                all_parts.append(text.strip())
+                clean_text = text
             
-            # Build full prompt
-            full_prompt = " ".join(all_parts)
+            # Build full prompt: committed (stable) + new from this window
+            # The window transcription covers everything since the last commit
+            full_prompt = (committed_text + " " + clean_text).strip() if committed_text else clean_text
+            
             print(f"[COCO] 📝 Prompt: \"{full_prompt}\"")
             
-            # Type new characters into terminal
-            new_chars = full_prompt[typed_len:]
-            if new_chars:
+            # Check if pending text stabilized (same for 2+ cycles = commit it)
+            if clean_text == pending_text and clean_text:
+                stable_count += 1
+                if stable_count >= 2:
+                    # Commit this text — it won't be revised anymore
+                    committed_text = full_prompt
+                    audio_buffer = np.array([], dtype=np.int16)  # Reset window
+                    pending_text = ""
+                    stable_count = 0
+                    print(f"[COCO] ✅ Committed: \"{committed_text}\"")
+            else:
+                pending_text = clean_text
+                stable_count = 0
+            
+            # Type new characters into terminal (only append, never go backwards)
+            if len(full_prompt) > typed_len:
+                new_chars = full_prompt[typed_len:]
                 keyboard.write(new_chars, delay=0.005)
                 typed_len = len(full_prompt)
             
@@ -256,7 +263,7 @@ def record_utterance() -> str:
         stream.stop()
         stream.close()
     
-    return " ".join(all_parts)
+    return committed_text or pending_text
 
 
 def type_into_terminal(text: str, submit: bool = True):
